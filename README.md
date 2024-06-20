@@ -13,6 +13,7 @@ A minimal implementation for multi-password ZIP file.
 ### TODO Lists
 
 - add compression method
+- ZIP64 format support zip file greater than 4GB
 - auto process files with command line input
 - use file `nyaszip.toml` to indicate file configurations
 

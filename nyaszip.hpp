@@ -20,21 +20,6 @@ typedef int32_t  i32;
 typedef int64_t  i64;
 
 
-/*#include <iostream>
-static void printhex(u8 const* data, u64 length)
-{
-    std::cout << std::internal << std::setfill('0') << std::hex;
-    for (u64 idx = 0; idx < length; idx++)
-    {
-        if ((idx & 15) == 0) {
-            std::cout << std::endl;
-        }
-        std::cout << std::setw(2) << (u16)(data[idx]) << ' ';
-    }
-    std::cout << std::endl;
-}*/
-
-
 namespace nyaszip
 {
     /// @brief the `operator^=` for bytes
@@ -239,7 +224,7 @@ namespace nyaszip
             // copy data into `buff` and do xor operation
             u8 n = xor_to<sizeof(u64)>(reinterpret_cast<u8 *>(buff), data, length);
             data += n;
-            u64 flag = n == 8 ? 0 /* ? 1ULL << 64 = 1ULL ? */ : (static_cast<u64>(1) << (n << 3));
+            u64 flag = n == sizeof(u64) ? 0 /* ? 1ULL << 64 = 1ULL ? */ : (static_cast<u64>(1) << (n << 3));
             flag -= 1;
 
             // calcute the remainder polynomial in GF(2) finite field with
@@ -1259,15 +1244,15 @@ namespace nyaszip
             return *this;
         }
 
-        /// @return return nullptr if no file
+        /// @return return nullptr if no file or zip is closed
         LocalFile * current() noexcept
         {
-            if (_files.empty()) { return nullptr; }
+            if (_state == WritingState::Closed || _files.empty()) { return nullptr; }
             return _files.back();
         }
         Zip & close_current();
 
-        LocalFile * add(::std::string file_name);
+        LocalFile * add(::std::string const& file_name);
 
         Zip & close()
         {
@@ -1364,7 +1349,7 @@ namespace nyaszip
 
         /* Preparing => Writing */
 
-        u16 _extra_length_local() const noexcept
+        u16 _extra_field_length() const noexcept
         {
             u16 len = 0;
             if (_aes != nullptr) { len += 11; }
@@ -1385,7 +1370,7 @@ namespace nyaszip
             *reinterpret_cast<u32 *>(header + 18) = _compressed;    // place holder
             *reinterpret_cast<u32 *>(header + 22) = _uncompressed;  // place holder
             *reinterpret_cast<u16 *>(header + 26) = file_name_length;
-            *reinterpret_cast<u16 *>(header + 28) = _extra_length_local();
+            *reinterpret_cast<u16 *>(header + 28) = _extra_field_length();
             _zip._write(header, 30);
 
             _zip._write(_name.c_str(), file_name_length);
@@ -1464,11 +1449,6 @@ namespace nyaszip
         }
         void _update_local_header() const
         {
-            /* condition: _state != WritingState::Closed
-            *          && _zip != nullptr
-            *          && _zip.has_output()
-            */
-            // TODO: using z64 if overflow
             u8 tmp[12];
             _get_header_info(reinterpret_cast<u32 *>(tmp));
             auto pos = _zip._tellp();
@@ -1478,10 +1458,6 @@ namespace nyaszip
         }
         void _write_data_descriptor() const
         {
-            /* condition: _state != WritingState::Closed
-            *          && _zip != nullptr
-            *          && _zip.has_output()
-            */
             if (_flag & GeneralPurposeBitFlag::use_data_descriptor)
             {
                 u8 tmp[24];
@@ -1519,7 +1495,7 @@ namespace nyaszip
             *reinterpret_cast<u16 *>(header + 14) = _modified.date;
             _get_header_info(reinterpret_cast<u32 *>(header + 16));
             *reinterpret_cast<u16 *>(header + 28) = file_name_length;
-            *reinterpret_cast<u16 *>(header + 30) = _extra_length_local();
+            *reinterpret_cast<u16 *>(header + 30) = _extra_field_length();
             *reinterpret_cast<u16 *>(header + 32) = comment_length;
             *reinterpret_cast<u16 *>(header + 34) = 0;
             *reinterpret_cast<u16 *>(header + 36) = 0;
@@ -1721,7 +1697,12 @@ namespace nyaszip
         LocalFile & close()
         {
             if (_state == WritingState::Closed) { return *this; }
-            if (_state == WritingState::Preparing) { start(); }
+            if (_state == WritingState::Preparing) {
+                // zero-length file or directory cannot have compression and enpryption
+                //compression = Store
+                password(nullptr);
+                start();
+            }
 
             if (_aes != nullptr) { _write_aes_end_data(); }
             _state = WritingState::Closed;
@@ -1757,13 +1738,13 @@ namespace nyaszip
         if (curr != nullptr) { curr->close(); }
         return *this;
     }
-    LocalFile * Zip::add(::std::string file_name)
+    LocalFile * Zip::add(::std::string const& file_name)
     {
         ensure<WritingState::Writing>::check(_state);
         close_current();
 
         auto local_file = new LocalFile(*this);
-        local_file->_name = file_name;
+        local_file->name(file_name);
 
         _files.push_back(local_file);
         return local_file;
