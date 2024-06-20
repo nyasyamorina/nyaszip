@@ -1,4 +1,4 @@
-# nyszip
+# nyaszip
 
 A minimal implementation for multi-password ZIP file.
 
