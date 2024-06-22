@@ -1,5 +1,9 @@
 build/
 .vscode/
 
+# some standard documents
 APPNOTE*
 rfc*
+
+# toml for C++ from "https://github.com/ToruNiina/toml11"
+toml.hpp

@@ -1,13 +1,20 @@
+// project: https://github.com/nyasyamorina/nyaszip
+// made by nyasyamorina
+
 #pragma once
 
 #include <stdint.h>
 #include <algorithm>
 #include <ctime>
 #include <bit>
-#include <vector>
+#include <list>
 #include <tuple>
 #include <string>
 #include <exception>
+#include <fstream>
+#ifdef NYASZIP_WARN
+#   include <iostream>
+#endif
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -352,7 +359,7 @@ namespace nyaszip
             // both `X` and `Y` are two-variable polynomial `B₃y³ + B₂y² + B₁y¹ + B₀y⁰`
             // that be stored as `B₀2⁰ + B₁2⁸ + B₂2¹⁶ + B₃2²⁴` in a word,
             // where `B₃,B₂,B₁,B₀ < x⁸` are polynomials about `x` defined in `GF2poly`.
-            // this calculation is calculating modular multiplication `XY mod (x⁰y⁴ + x⁰y⁰)`
+            // this calculation is calculating modular multiplication `XY mod (y⁴ + y⁰)(GF2_POLY_DIVISOR)`
             auto [x0, x1, x2, x3] = u32_to_u8s(X); auto [y0, y1, y2, y3] = u32_to_u8s(Y);
             u8 r0 = byte_mul(x0, y0) ^ byte_mul(x3, y1) ^ byte_mul(x2, y2) ^ byte_mul(x1, y3);
             u8 r1 = byte_mul(x1, y0) ^ byte_mul(x0, y1) ^ byte_mul(x3, y2) ^ byte_mul(x2, y3);
@@ -1094,7 +1101,61 @@ namespace nyaszip
     };
 
 
-    // TODO: class Compression
+    class AbstractCompression
+    {
+        friend class LocalFile;
+        /*  ideally:
+        1. copy data from LocalFile::_buffer into AbstractCompression::_in_buffer
+        2. compress data in AbstractCompression::_in_buffer to LocalFile::_buffer
+        */
+
+    public:
+        static constexpr u64 BUFFER_LENGTH = 4 * 1024;
+
+    protected:
+        u8 _in_buffer[BUFFER_LENGTH];
+        u8 * _in_ptr;
+        u8 * _in_end;
+
+        void _init()
+        {
+            _in_ptr = _in_end = _in_buffer;
+        }
+
+        void _input(u8 const* data, u64 length /* <= BUFFER_LENGTH */)
+        {
+            ::std::memcpy(_in_buffer, data, length);
+            _in_ptr = _in_buffer;
+            _in_end = _in_buffer + length;
+        }
+
+        virtual u64 _compress(u8 * output, u64 max) = 0;
+        //{
+        //    auto out_ptr = output;
+        //    auto out_end = output + max;
+        //    while (out_ptr < out_end && _in_ptr < _in_end)
+        //    {
+        //        // encode m bytes from _in_ptr become n bytes to out_ptr
+        //        u64 m, n;
+        //        _in_ptr += m;
+        //        out_ptr += n;
+        //    }
+        //    return out_ptr - output;
+        //}
+
+    public:
+        AbstractCompression()
+        {
+            _init();
+        }
+
+        static constexpr u64 buffer_length() noexcept
+        {
+            return BUFFER_LENGTH;
+        }
+
+        virtual u8 method() const noexcept = 0;
+    };
 
 
     enum WritingState : u8
@@ -1103,7 +1164,7 @@ namespace nyaszip
         Writing,
         Closed
     };
-    template<WritingState target_state> class ensure
+    template<WritingState target_state> class ensure : public ::std::exception
     {
     public:
         static void check(WritingState state)
@@ -1112,12 +1173,12 @@ namespace nyaszip
             throw ensure();
         }
 
-        char * what()
+        virtual char const* what() const noexcept override
         {
             return "WritingState check failed";
         }
     };
-    template<WritingState target_state> class ensure_not
+    template<WritingState target_state> class ensure_not : public ::std::exception
     {
     public:
         static void check(WritingState state)
@@ -1126,13 +1187,11 @@ namespace nyaszip
             throw ensure_not();
         }
 
-        char * what()
+        virtual char const* what() const noexcept override
         {
             return "WritingState check failed";
         }
     };
-
-    class LocalFile;
 
     class Zip
     {
@@ -1152,7 +1211,7 @@ namespace nyaszip
         i64 _offset;    // zip start
         i64 _cd_offset; // the central directory offset from zip start
 
-        ::std::vector<LocalFile *> _files;
+        ::std::list<LocalFile> _files;
         ::std::string _comment;
         PCG_XSH_RR _random;
 
@@ -1205,7 +1264,7 @@ namespace nyaszip
 
     public:
         Zip(::std::ostream & output_, bool owned_output_ = false) noexcept
-        : _output(&output_), _owned_output(owned_output_), _files(), _random() {
+        : _output(::std::addressof(output_)), _owned_output(owned_output_), _files(), _random() {
             _init();
         }
 
@@ -1223,10 +1282,6 @@ namespace nyaszip
         WritingState state() const noexcept
         {
             return _state;
-        }
-        i64 offset() const noexcept
-        {
-            return _offset;
         }
         bool z64() const noexcept
         {
@@ -1248,11 +1303,11 @@ namespace nyaszip
         LocalFile * current() noexcept
         {
             if (_state == WritingState::Closed || _files.empty()) { return nullptr; }
-            return _files.back();
+            return &_files.back();
         }
         Zip & close_current();
 
-        LocalFile * add(::std::string const& file_name);
+        LocalFile & add(::std::string const& file_name);
 
         Zip & close()
         {
@@ -1271,7 +1326,7 @@ namespace nyaszip
     {
         friend class Zip;
     public:
-        static constexpr u64 BUFFER_LENGTH = 4 * 1024;
+        static constexpr u64 BUFFER_LENGTH = AbstractCompression::buffer_length();
 
         static ::std::string safe_file_name(::std::string const& str)
         {
@@ -1291,13 +1346,13 @@ namespace nyaszip
 
     protected:
         Zip & _zip;
-        i64 _offset;
+        i64 _offset;    // the local file header offset from zip start
         WritingState _state;
         AbstractZipAES * _aes;
 
         u16 _version;
         u16 _flag;
-        //Compression * _compression;
+        AbstractCompression * _compression;
         MsDosTime _modified;
         u32 _crc;
         u64 _compressed;
@@ -1305,7 +1360,7 @@ namespace nyaszip
         ::std::string _name;
         ::std::string _comment;
         /// @brief input/output buffer
-        u8 _buffer[BUFFER_LENGTH];
+        u8 * _buffer;
 
         void _init()
         {
@@ -1315,13 +1370,20 @@ namespace nyaszip
 
             _version = 20;
             _flag = 0;
+            _compression = nullptr;
             _modified = MsDosTime(time(nullptr));
             _crc = 0;
             _compressed = 0;
             _uncompressed = 0;
             _name = "";
             _comment = "";
+
+            _buffer = nullptr;
         }
+
+#ifdef NYASZIP_WARN
+        static bool showed_aes_warn;
+#endif
         void _init_aes(u16 bits)
         {
             delete _aes;
@@ -1338,7 +1400,14 @@ namespace nyaszip
                 _aes = new ZipAES<256>;
                 break;
             default:
-                // TODO: throw error
+#ifdef NYASZIP_WARN
+                if (!showed_aes_warn)
+                {
+                    ::std::cout << "[warn] got an unsupported AES bits, ignore it and use AES-256 instead" << ::std::endl;
+                    showed_aes_warn = true;
+                }
+#endif
+                _aes = new ZipAES<256>;
                 break;
             }
             _zip._gen_salt(_aes->salt(), _aes->salt_length());
@@ -1346,6 +1415,9 @@ namespace nyaszip
             _version = ::std::max<u16>(_version, 51/* the zip version supported AES */);
             _flag |= GeneralPurposeBitFlag::encrypted;
         }
+
+        LocalFile(LocalFile const&) = delete;
+        LocalFile & operator =(LocalFile const&) = delete;
 
         /* Preparing => Writing */
 
@@ -1412,16 +1484,32 @@ namespace nyaszip
             }
             _uncompressed += length;
 
-            // TODO: compression stuff
-            auto cmpr_length = length;
-            _compressed += cmpr_length;
-
-            if (_aes != nullptr)
+            if (_compression == nullptr)
             {
-                _aes->apply(_buffer, cmpr_length);
-            }
+                _compressed += length;
 
-            _zip._write(_buffer, cmpr_length);
+                if (_aes != nullptr)
+                {
+                    _aes->apply(_buffer, length);
+                }
+                _zip._write(_buffer, length);
+            }
+            else
+            {
+                _compression->_input(_buffer, length);
+                u64 cmpred;
+                do
+                {
+                    cmpred = _compression->_compress(_buffer, BUFFER_LENGTH);
+                    _compressed += cmpred;
+                    if (_aes != nullptr)
+                    {
+                        _aes->apply(_buffer, cmpred);
+                    }
+                    _zip._write(_buffer, cmpred);
+
+                } while (cmpred == BUFFER_LENGTH);
+            }
         }
         void _write_aes_end_data()
         {
@@ -1517,6 +1605,7 @@ namespace nyaszip
         ~LocalFile()
         {
             delete _aes;
+            delete[] _buffer;
         }
 
         Zip & zip() noexcept
@@ -1543,9 +1632,9 @@ namespace nyaszip
         {
             return _flag;
         }
-        u16 compression_method() const noexcept
+        u16 compression_method() const
         {
-            return 0x0000;  // TODO: compression stuff
+            return _compression == nullptr ? 0x0000 : _compression->method();
         }
         MsDosTime modified() const noexcept
         {
@@ -1658,28 +1747,41 @@ namespace nyaszip
             return *this;
         }
 
+        /// @return return a NULL after closing
         u8 * buffer() noexcept
         {
+            if (_buffer == nullptr && _state != WritingState::Closed)
+            {
+                _buffer = new u8[BUFFER_LENGTH];
+            }
             return _buffer;
         }
+        /// @return may return a NULL, please check before access into it
         u8 const* buffer() const noexcept
         {
             return _buffer;
         }
-        static constexpr u64 buffer_length() noexcept
+        u64 buffer_length() const noexcept
         {
-            return BUFFER_LENGTH;
+            return _buffer == nullptr ? 0 : BUFFER_LENGTH;
         }
 
         LocalFile & flush_buff(u64 length)
         {
             start();
-            _flush_buff(length);
+            if (_buffer != nullptr)
+            {
+                _flush_buff(length);
+            }
             return *this;
         }
         LocalFile & write(u8 const* data, u64 length)
         {
             start();
+            if (_buffer == nullptr)
+            {
+                _buffer = new u8[BUFFER_LENGTH];
+            }
             while (length != 0)
             {
                 u64 flush_length = ::std::min(length, BUFFER_LENGTH);
@@ -1701,8 +1803,11 @@ namespace nyaszip
                 // zero-length file or directory cannot have compression and enpryption
                 //compression = Store
                 password(nullptr);
-                start();
+                _write_local_header();
             }
+
+            delete[] _buffer;
+            _buffer = nullptr;
 
             if (_aes != nullptr) { _write_aes_end_data(); }
             _state = WritingState::Closed;
@@ -1713,12 +1818,13 @@ namespace nyaszip
         }
     };
 
+#ifdef NYASZIP_WARN
+    bool LocalFile::showed_aes_warn = false;
+#endif
+
     Zip::~Zip()
     {
-        ::std::for_each(_files.begin(), _files.end(), [](LocalFile * & file){
-            delete file;
-            file = nullptr;
-        });
+        _files.clear();
         if (_owned_output)
         {
             delete _output;
@@ -1727,9 +1833,9 @@ namespace nyaszip
     void Zip::_write_central_direction()
     {
         _cd_offset = _tellp();
-        for (LocalFile const* file : _files)
+        for (LocalFile const& file : _files)
         {
-            file->_write_cd_header();
+            file._write_cd_header();
         }
     }
     Zip & Zip::close_current()
@@ -1738,15 +1844,16 @@ namespace nyaszip
         if (curr != nullptr) { curr->close(); }
         return *this;
     }
-    LocalFile * Zip::add(::std::string const& file_name)
+    LocalFile & Zip::add(::std::string const& file_name)
     {
         ensure<WritingState::Writing>::check(_state);
         close_current();
 
-        auto local_file = new LocalFile(*this);
-        local_file->name(file_name);
+        _files.emplace_back(*this);
 
-        _files.push_back(local_file);
+        LocalFile & local_file = _files.back();
+        local_file.name(file_name);
+
         return local_file;
     }
 
