@@ -30,7 +30,7 @@ typedef int64_t  i64;
 namespace nyaszip
 {
     /// @brief the `operator^=` for bytes
-    /// @tparam max the number for one operation, must be smaller than 63
+    /// @tparam max the number for one operation, must be smaller than 64
     template<u8 length> static void xor_to(u8 * dst, u8 const* src)
     {
         static_assert(length < 64, "the number is greater than 63");
