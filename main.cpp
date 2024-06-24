@@ -19,7 +19,7 @@ int main(int argc, char ** argv) {
     aaa.write("the password of \"folder/test.txt\" is \"abcdef\"");
     //aaa.close();  it will be automatically closed when add a new file or close the zip
 
-    auto & test = zip.add("folder/test.txt");
+    auto & test = zip.add("folder\\test.txt");
     test.password("abcdef", 192);
     test.write("The forgotten garbage that transcends all causes and effects.");
     test.comment("Fin");
@@ -30,7 +30,7 @@ int main(int argc, char ** argv) {
     readme.modified(MsDosTime(946684800));
 
     // obviously, zip does not have any way to prevent duplicate files.
-    auto & test2 = zip.add("folder/test.txt");
+    auto & test2 = zip.add("//folder/test.txt");
     test2.password("not published password" /* AES-256 is the default encryption */);
     test2.write("made by nyasyamorina");
 

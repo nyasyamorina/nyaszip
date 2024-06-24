@@ -8,6 +8,8 @@ If you're looking for standard documents, here is some I used:
 
     note: the "magic number" used in crc-32 from section 4.4.7 seems to be not correct, may be I just don't use it in a correct way? Anyway, the crc-32 calculation described in the wiki is correct.
 
+- [the file attributes](https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants)
+
 - [the starndard](http://www.faqs.org/rfcs/rfc2898.html) included PBKDF2 key generation.
 
 - [the AES standard](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf), also included step by step example result in the end of file, nice for debugging.
@@ -42,13 +44,15 @@ the name of file must follow some rules:
 2. use `/` as the path separator, instead of `\`,
 3. cannot starts with any `/`.
 
-Using the `current()` method can get the pointer of the last added `LocalFile`, it will return `NULL` is there is no file or the zip writter is clodes. And use `close_current()` instead of `current()->close()` to close current file.
+The file name will be automatically fixed by `LocalFile::safe_file_name(string)` to obey rules 2 and 3.
 
-Use the `comment(string)` to add or change comment for the zip file.
+Using the `current()` method can get the pointer of the last added `LocalFile`, it will return `NULL` if there is no file or the zip writter is closed. And use `close_current()` instead of `current()->close()` to close current file.
+
+Use the `comment(string)` to add or change the comment for the zip file.
 
 Use `close()` to close the zip writter, the state will become `Closed` after closing. this method will also automatically close the last `LocalFile`. The `close()` method must be called before exit or deleting the output stream.
 
-After closing, any change to the zip file is invalid and throw an error, including adding file and changing comment. Calling `close()` multiple time is allowed, but it will just run first time.
+After closing, any change to the zip file is invalid and throw an error, including adding file and changing comment. Calling `close()` multiple time is allowed, but it will just run at the first time.
 
 ---
 
@@ -56,15 +60,15 @@ After closing, any change to the zip file is invalid and throw an error, includi
 
 You can use `Zip::add(string file_name)` to add a file into the zip, see above.
 
-Use the `state()` method to get the `WritingState` of the file, it will be `Preparing` after create.
+Use the `state()` method to get the `WritingState` of the file, it will be `Preparing` after created.
 
-During the `Preparing` state, you can set some property for the file, like changing file name or comment, specify the file name and the comment are the utf-8 encoded, changing the last modified time,
+During the `Preparing` state, you can set some property for the file, like changing file name or comment, specifyinf the file name and the comment are the utf-8 encoded, setting the file attribute using `external_attribute(u32)`, changing the last modified time,
 
 But the most useful thing here is using `password(string)` to set the password for the file, note that the password can be empty. Also you can use `password(nullptr)` to unset the password.
 
-The default mod of AES encrytion is AES-256, and you can specify the mod after the password string: `password(string, u16 bits)`, where bits can be 128, 192 or 256.
+The default encrytion is AES-256, you can specify the AES mod after the password argument: `password(string, u16 bits)`, where bits can be 128, 192 or 256.
 
-You can start writing data into file after preparing by calling `start()` method, but calling this method is optional, it will be automatically called before actually writing data.
+You can start writing data into file after preparing by calling `start()` method. Calling this method is optional, it will be automatically called before actually writing data.
 
 There are two way to writing data:
 
@@ -79,6 +83,8 @@ There are few thing can be changed after file closed, or even before the zip wri
 ---
 
 ## TODO Lists (not sorted)
+
+- use `u8string` instead of `string` to store file names and comments
 
 - add NTFS or UNIX extra field to support more file information
 

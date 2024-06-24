@@ -142,10 +142,7 @@ namespace nyaszip
         MsDosTime(i64 time)
         {
             tm t;
-            if (localtime_s(&t, &time) != 0)
-            {
-                // TODO: throw error
-            }
+            localtime_s(&t, &time);
             set(t);
         }
         MsDosTime(tm const& t)
@@ -1103,60 +1100,70 @@ namespace nyaszip
 
     class AbstractCompression
     {
-        friend class LocalFile;
-        /*  ideally:
-        1. copy data from LocalFile::_buffer into AbstractCompression::_in_buffer
-        2. compress data in AbstractCompression::_in_buffer to LocalFile::_buffer
-        */
-
     public:
         static constexpr u64 BUFFER_LENGTH = 4 * 1024;
 
     protected:
-        u8 _in_buffer[BUFFER_LENGTH];
-        u8 * _in_ptr;
-        u8 * _in_end;
-
-        void _init()
-        {
-            _in_ptr = _in_end = _in_buffer;
-        }
-
-        void _input(u8 const* data, u64 length /* <= BUFFER_LENGTH */)
-        {
-            ::std::memcpy(_in_buffer, data, length);
-            _in_ptr = _in_buffer;
-            _in_end = _in_buffer + length;
-        }
-
-        virtual u64 _compress(u8 * output, u64 max) = 0;
-        //{
-        //    auto out_ptr = output;
-        //    auto out_end = output + max;
-        //    while (out_ptr < out_end && _in_ptr < _in_end)
-        //    {
-        //        // encode m bytes from _in_ptr become n bytes to out_ptr
-        //        u64 m, n;
-        //        _in_ptr += m;
-        //        out_ptr += n;
-        //    }
-        //    return out_ptr - output;
-        //}
+        u8 _buffer[BUFFER_LENGTH];
 
     public:
         AbstractCompression()
-        {
-            _init();
-        }
+        {}
 
+        virtual ~AbstractCompression()
+        {}
+
+        u8 * buffer() noexcept
+        {
+            return _buffer;
+        }
+        u8 const* buffer() const noexcept
+        {
+            return _buffer;
+        }
         static constexpr u64 buffer_length() noexcept
         {
             return BUFFER_LENGTH;
         }
 
+        /// @brief compression method number
         virtual u8 method() const noexcept = 0;
+        /// @brief the version of zip need to extract
+        virtual u16 version() const noexcept = 0;
+
+        /// @brief compress data into buffer
+        /// @return a tuple of (the length of compressed data, compressed length in buffer)
+        virtual ::std::tuple<u64, u64> compress(u8 const* data, u64 length) = 0;
     };
 
+    class FileAttributes
+    {
+        /* from "https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants" */
+    public:
+        static constexpr u32 Readonly           = 0x00000001;
+        static constexpr u32 Hidden             = 0x00000002;
+        static constexpr u32 System             = 0x00000004;
+        static constexpr u32 VolumeLable        = 0x00000008;
+        static constexpr u32 Directory          = 0x00000010;
+        static constexpr u32 Archive            = 0x00000020;
+        static constexpr u32 Device             = 0x00000040;
+        static constexpr u32 Normal             = 0x00000080;
+        static constexpr u32 Temporary          = 0x00000100;
+        static constexpr u32 Sparse             = 0x00000200;
+        static constexpr u32 ReparsePoint       = 0x00000400;
+        static constexpr u32 Compressed         = 0x00000800;
+        static constexpr u32 Offline            = 0x00001000;
+        static constexpr u32 NotContentIndexing = 0x00002000;
+        static constexpr u32 Encrypted          = 0x00004000;
+        static constexpr u32 IntegrityStream    = 0x00008000;
+        static constexpr u32 Virtual            = 0x00010000;
+        static constexpr u32 NoScrubData        = 0x00020000;
+        static constexpr u32 EA                 = 0x00040000;
+        static constexpr u32 Pinned             = 0x00080000;
+        static constexpr u32 Unpinned           = 0x00100000;
+        static constexpr u32 RecallOnOpen       = 0x00200000;
+        static constexpr u32 RecallOnDataAccess = 0x00400000;
+    };
 
     enum WritingState : u8
     {
@@ -1191,6 +1198,25 @@ namespace nyaszip
         {
             return "WritingState check failed";
         }
+    };
+
+    static constexpr u16 VersionMadeOf = 51;
+    class VersionNeedToExtra
+    {
+    public:
+        static constexpr u16 Default      = 10;
+        static constexpr u16 VolumeLabel  = 11;
+        static constexpr u16 Directory    = 20;
+        static constexpr u16 Deflate      = 20;
+        static constexpr u16 Deflate64    = 21;
+        static constexpr u16 PatchDataSet = 27;
+        static constexpr u16 Zip64Format  = 45;
+        static constexpr u16 BZip2        = 46;
+        static constexpr u16 AEx          = 51;
+        static constexpr u16 CDEncryption = 62;
+        static constexpr u16 LZMA         = 63;
+        static constexpr u16 Blowfish     = 63;
+        static constexpr u16 Twofish      = 63;
     };
 
     class Zip
@@ -1287,6 +1313,10 @@ namespace nyaszip
         {
             return false;   // TODO:
         }
+        bool central_directory_encrypt() const noexcept
+        {
+            return false;
+        }
 
         ::std::string const& comment() const noexcept
         {
@@ -1326,12 +1356,32 @@ namespace nyaszip
     {
         friend class Zip;
     public:
-        static constexpr u64 BUFFER_LENGTH = AbstractCompression::buffer_length();
+        static constexpr u64 BUFFER_LENGTH = 4 * 1024;
+
+        struct InvalidFileNameException : public ::std::exception
+        {
+        public:
+            ::std::string file_name;
+
+            InvalidFileNameException(::std::string const& name)
+            : file_name(name) {}
+
+            virtual char const* what() const noexcept override
+            {
+                return "got a invalid file name";
+            }
+        };
 
         static ::std::string safe_file_name(::std::string const& str)
         {
-            //TODO:
-            return str;
+            ::std::string res = str;
+            ::std::replace(res.begin(), res.end(), '\\', '/');
+            auto idx = res.find_first_not_of('/');
+            if (idx == ::std::string::npos)
+            {
+                throw InvalidFileNameException(str);
+            }
+            return res.substr(idx, res.length() - idx);
         }
 
         class GeneralPurposeBitFlag
@@ -1347,42 +1397,69 @@ namespace nyaszip
     protected:
         Zip & _zip;
         i64 _offset;    // the local file header offset from zip start
+
         WritingState _state;
+        u8 * _buffer;
+        bool _z64;
+        u16 _cmpr_version;
+        AbstractCompression * _cmpr;
+        u8 _aes_mode;
         AbstractZipAES * _aes;
 
-        u16 _version;
         u16 _flag;
-        AbstractCompression * _compression;
+        u16 _cmpr_method;
         MsDosTime _modified;
         u32 _crc;
         u64 _compressed;
         u64 _uncompressed;
         ::std::string _name;
         ::std::string _comment;
-        /// @brief input/output buffer
-        u8 * _buffer;
+        u32 _external;
 
         void _init()
         {
             _offset = _zip._tellp();
+
             _state = WritingState::Preparing;
+            _buffer = nullptr;
+            _z64 = false;
+            _cmpr_version = VersionNeedToExtra::Default;
+            _cmpr = nullptr;
+            _aes_mode = 0;
             _aes = nullptr;
 
-            _version = 20;
             _flag = 0;
-            _compression = nullptr;
+            _cmpr_method = 0;
             _modified = MsDosTime(time(nullptr));
             _crc = 0;
             _compressed = 0;
             _uncompressed = 0;
             _name = "";
             _comment = "";
+            _external = 0;
+        }
 
-            _buffer = nullptr;
+        void _rm_cmpr()
+        {
+            delete _cmpr;
+            _cmpr = nullptr;
+            _cmpr_method = 0;
+            _cmpr_version = VersionNeedToExtra::Default;
         }
 
 #ifdef NYASZIP_WARN
         static bool showed_aes_warn;
+        static void _aes_warn()
+        {
+            if (!showed_aes_warn)
+            {
+                ::std::cout << "[warn] got an unsupported AES bits, ignore it and use AES-256 instead" << ::std::endl;
+                showed_aes_warn = true;
+            }
+        }
+#else
+        static void _aes_warn()
+        {}
 #endif
         void _init_aes(u16 bits)
         {
@@ -1400,20 +1477,21 @@ namespace nyaszip
                 _aes = new ZipAES<256>;
                 break;
             default:
-#ifdef NYASZIP_WARN
-                if (!showed_aes_warn)
-                {
-                    ::std::cout << "[warn] got an unsupported AES bits, ignore it and use AES-256 instead" << ::std::endl;
-                    showed_aes_warn = true;
-                }
-#endif
+                _aes_warn();
                 _aes = new ZipAES<256>;
                 break;
             }
             _zip._gen_salt(_aes->salt(), _aes->salt_length());
 
-            _version = ::std::max<u16>(_version, 51/* the zip version supported AES */);
+            _aes_mode = (_aes->bits() >> 6) - 1; // (1|2|3) for AES-(128|192|256);
             _flag |= GeneralPurposeBitFlag::encrypted;
+        }
+        void _rm_aes()
+        {
+            delete _aes;
+            _aes = nullptr;
+            _aes_mode = 0;
+            _flag &= ~GeneralPurposeBitFlag::encrypted;
         }
 
         LocalFile(LocalFile const&) = delete;
@@ -1421,19 +1499,55 @@ namespace nyaszip
 
         /* Preparing => Writing */
 
+        u16 _enpryption_version() const noexcept
+        {
+            u16 res = VersionNeedToExtra::Default;
+            if (_aes_mode != 0)
+            {
+                res = VersionNeedToExtra::AEx;
+            }
+            return res;
+        }
+        u16 _functionality_version() const noexcept
+        {
+            u16 res = VersionNeedToExtra::Default;
+            if (_external & FileAttributes::VolumeLable)
+            {
+                res = VersionNeedToExtra::VolumeLabel;
+            }
+            if (_external & FileAttributes::Directory)
+            {
+                res = VersionNeedToExtra::Directory;
+            }
+            // TODO: File is a patch data set (27)
+            if (_z64)
+            {
+                res = VersionNeedToExtra::Zip64Format;
+            }
+            if (_zip.central_directory_encrypt())
+            {
+                res = VersionNeedToExtra::CDEncryption;
+            }
+            return res;
+        }
+        u16 _version() const noexcept
+        {
+            return ::std::max(_cmpr_version, ::std::max(_enpryption_version(), _functionality_version()));
+        }
+
         u16 _extra_field_length() const noexcept
         {
             u16 len = 0;
-            if (_aes != nullptr) { len += 11; }
+            if (_aes_mode != 0) { len += 11; }
             return len;
         }
         void _write_local_header() const
         {
-            u16 cmpr_method = _aes == nullptr ? compression_method() : 99;
+            u16 cmpr_method = _aes_mode != 0 ? 99 : _cmpr_method;
             u16 file_name_length = _name.size() & 0xFFFF;
             u8 header[30];
             *reinterpret_cast<u32 *>(header +  0) = 0x04034B50;
-            *reinterpret_cast<u16 *>(header +  4) = _version;
+            *reinterpret_cast<u16 *>(header +  4) = _version();
             *reinterpret_cast<u16 *>(header +  6) = _flag;
             *reinterpret_cast<u16 *>(header +  8) = cmpr_method;
             *reinterpret_cast<u16 *>(header + 10) = _modified.time;
@@ -1450,15 +1564,15 @@ namespace nyaszip
         }
         void _write_extra_field() const
         {
-            if (_aes != nullptr)
+            if (_aes_mode != 0)
             {
                 u8 field[11];
                 *reinterpret_cast<u16 *>(field + 0) = 0x9901;
                 *reinterpret_cast<u16 *>(field + 2) = 0x0007;
                 *reinterpret_cast<u16 *>(field + 4) = 0x0002;   // ZIP AE-2
                 field[6] = 'A'; field[7] = 'E';
-                field[8] = (_aes->bits() >> 6) - 1; // (1|2|3) for AES-(128|192|256)
-                *reinterpret_cast<u16 *>(field + 9) = compression_method();
+                field[8] = _aes_mode;
+                *reinterpret_cast<u16 *>(field + 9) = _cmpr_method;
                 _zip._write(field, 11);
             }
         }
@@ -1471,9 +1585,9 @@ namespace nyaszip
             _zip._write(_aes->vari_code(), _aes->vari_code_length());
             _compressed += _aes->salt_length() + _aes->vari_code_length();
         }
-        void _flush_buff(u64 length)
+        void _flush_buffer(u64 length)
         {
-            if (_aes != nullptr)
+            if (_aes_mode != 0)
             {
                 // use the authentication code to verify the correctness of the encrypted data in ZIP AE-2,
                 // instead of using crc32 to verify the correctness of the un-encrypted data
@@ -1484,7 +1598,7 @@ namespace nyaszip
             }
             _uncompressed += length;
 
-            if (_compression == nullptr)
+            if (_cmpr == nullptr)
             {
                 _compressed += length;
 
@@ -1496,19 +1610,19 @@ namespace nyaszip
             }
             else
             {
-                _compression->_input(_buffer, length);
-                u64 cmpred;
-                do
+                u8 * buffer_ptr = _buffer;
+                while (length != 0)
                 {
-                    cmpred = _compression->_compress(_buffer, BUFFER_LENGTH);
-                    _compressed += cmpred;
+                    auto [consumed, cmpr_length] = _cmpr->compress(buffer_ptr, length);
+                    buffer_ptr += consumed; length -= consumed;
+                    _compressed += cmpr_length;
+
                     if (_aes != nullptr)
                     {
-                        _aes->apply(_buffer, cmpred);
+                        _aes->apply(_cmpr->buffer(), cmpr_length);
                     }
-                    _zip._write(_buffer, cmpred);
-
-                } while (cmpred == BUFFER_LENGTH);
+                    _zip._write(_cmpr->buffer(), cmpr_length);
+                }
             }
         }
         void _write_aes_end_data()
@@ -1569,14 +1683,14 @@ namespace nyaszip
 
         void _write_cd_header() const
         {
-            u16 cmpr_method = _aes == nullptr ? compression_method() : 99;
+            u16 cmpr_method = _aes_mode != 0 ? 99 : _cmpr_method;
             u16 file_name_length = _name.size() & 0xFFFF;
             u16 comment_length = _comment.size() & 0xFFFF;
 
             u8 header[46];
             *reinterpret_cast<u32 *>(header +  0) = 0x02014B50;
-            *reinterpret_cast<u16 *>(header +  4) = 51;
-            *reinterpret_cast<u16 *>(header +  6) = _version;
+            *reinterpret_cast<u16 *>(header +  4) = VersionMadeOf;
+            *reinterpret_cast<u16 *>(header +  6) = _version();
             *reinterpret_cast<u16 *>(header +  8) = _flag;
             *reinterpret_cast<u16 *>(header + 10) = cmpr_method;
             *reinterpret_cast<u16 *>(header + 12) = _modified.time;
@@ -1587,7 +1701,7 @@ namespace nyaszip
             *reinterpret_cast<u16 *>(header + 32) = comment_length;
             *reinterpret_cast<u16 *>(header + 34) = 0;
             *reinterpret_cast<u16 *>(header + 36) = 0;
-            *reinterpret_cast<u32 *>(header + 38) = 0;
+            *reinterpret_cast<u32 *>(header + 38) = _external;
             *reinterpret_cast<u32 *>(header + 42) = _offset;
             _zip._write(header, 46);
 
@@ -1624,17 +1738,21 @@ namespace nyaszip
         {
             return _state;
         }
+        bool z64() const noexcept
+        {
+            return _z64;
+        }
         u16 version_need_to_extra() const noexcept
         {
-            return _version;
+            return _version();
         }
         u16 general_purpose_bit_flag() const noexcept
         {
             return _flag;
         }
-        u16 compression_method() const
+        u16 compression_method() const noexcept
         {
-            return _compression == nullptr ? 0x0000 : _compression->method();
+            return _cmpr_method;
         }
         MsDosTime modified() const noexcept
         {
@@ -1642,7 +1760,7 @@ namespace nyaszip
         }
         u32 crc() const noexcept
         {
-            return _aes != nullptr ? 0 : _crc;
+            return _aes_mode != 0 ? 0 : _crc;
         }
         u64 compressed_size() const noexcept
         {
@@ -1659,6 +1777,10 @@ namespace nyaszip
         ::std::string const& comment() const noexcept
         {
             return _comment;
+        }
+        u32 external_attribute() const noexcept
+        {
+            return _external;
         }
 
         LocalFile & name(::std::string const& name_)
@@ -1698,6 +1820,7 @@ namespace nyaszip
         /// @brief change the last modifird time
         LocalFile & modified(MsDosTime modified_)
         {
+            ensure_not<WritingState::Closed>::check(_zip.state());
             _modified = modified_;
             // update local file header
             if (_state != WritingState::Preparing)
@@ -1710,21 +1833,30 @@ namespace nyaszip
             }
             return *this;
         }
+        /// @brief change the external attribute, i.e., file attribute in the file system
+        LocalFile & external_attribute(u32 exter)
+        {
+            // should have some restriction, like,
+            // if this local file is a directory (0x00000010), then its size must be 0.
+            // may split this into smaller methods?
+            ensure_not<WritingState::Closed>::check(_zip.state());
+            _external = exter;
+            return *this;
+        }
 
-        // clean password
+        // clear the password
         LocalFile & password(nullptr_t)
         {
             ensure<WritingState::Preparing>::check(_state);
-            delete _aes;
-            _aes = nullptr;
+            _rm_aes();
             return *this;
         }
-        // set password
+        // set the password
         LocalFile & password(::std::string const& password_, u16 AES_bits = 256)
         {
             return password(reinterpret_cast<u8 const*>(password_.c_str()), password_.size(), AES_bits);
         }
-        // set password
+        // set the password
         LocalFile & password(u8 const* password_, u64 length, u16 AES_bits = 256)
         {
             ensure<WritingState::Preparing>::check(_state);
@@ -1771,7 +1903,7 @@ namespace nyaszip
             start();
             if (_buffer != nullptr)
             {
-                _flush_buff(length);
+                _flush_buffer(length);
             }
             return *this;
         }
@@ -1786,7 +1918,7 @@ namespace nyaszip
             {
                 u64 flush_length = ::std::min(length, BUFFER_LENGTH);
                 ::std::memcpy(_buffer, data, flush_length);
-                _flush_buff(flush_length);
+                _flush_buffer(flush_length);
                 data += flush_length; length -= flush_length;
             }
             return *this;
@@ -1799,10 +1931,10 @@ namespace nyaszip
         LocalFile & close()
         {
             if (_state == WritingState::Closed) { return *this; }
-            if (_state == WritingState::Preparing) {
+            if (_uncompressed == 0) {
                 // zero-length file or directory cannot have compression and enpryption
-                //compression = Store
-                password(nullptr);
+                _rm_cmpr();
+                _rm_aes();
                 _write_local_header();
             }
 
@@ -1813,6 +1945,11 @@ namespace nyaszip
             _state = WritingState::Closed;
             _update_local_header();
             _write_data_descriptor();
+
+            delete _cmpr;
+            delete _aes;
+            _cmpr = nullptr;
+            _aes = nullptr;
 
             return *this;
         }
