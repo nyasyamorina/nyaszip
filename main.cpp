@@ -26,9 +26,10 @@ tuple<string, list<string>> process_input(int argc, char ** argv)
 
         if (strcmp(arg, "-o") == 0 || strcmp(arg, "--out") == 0)
         {
-            if (idx + 1 < argc)
+            idx++;
+            if (idx < argc)
             {
-                zip = argv[idx++];
+                zip = argv[idx];
             }
         }
         else
@@ -59,12 +60,17 @@ public:
 void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
 {
     fs::path path = root / rel;
+
+    cout << endl << "append: " << path << endl;
+    cout << "root: " << root << endl;
+    cout << "rel: " << rel << endl;
+
     if (fs::is_directory(path))
     {
         u64 file_count = 0;
         for (auto const& entry : fs::directory_iterator(path))
         {
-            add_to(zip, root, rel / entry);
+            add_to(zip, root, rel / entry.path().filename());
             file_count += 1;
         }
         if (file_count == 0)
@@ -81,15 +87,18 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
             return;
         }
 
-        cout << endl << "append: \"" << path << "\"" << endl;
+        /*cout << endl << "append: " << path << endl;
+        cout << "root: " << root << endl;
+        cout << "rel: " << rel << endl;*/
         ifstream in(path, ios::in | ios::binary);
         if (in.fail())
         {
-            cout << "cannot open file: \"" << path << "\", pass" << endl;
+            cout << "cannot open file: " << path << endl;
             return;
         }
 
         auto & file = zip.add(rel.string());
+        cout << "name: " << file.name() << endl;
 
         auto modified = fs::last_write_time(path);
         auto mtime = system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(modified - file_clock::now()));
@@ -104,7 +113,7 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
         auto buffer = reinterpret_cast<char *>(file.buffer());
         if (buffer == nullptr)
         {
-            cout << "cannot allocate buffer for file \"" << rel << "\", pass" << endl;
+            cout << "cannot allocate buffer for " << rel << endl;
             return;
         }
         u64 get_size;
@@ -138,7 +147,7 @@ void build_zip(string const& zip_name, list<string> const& files)
 
         if (rel.empty())
         {
-            cout << "invalid filename: \"" << file << "\", pass" << endl;
+            cout << "invalid filename: \"" << file << "\"" << endl;
         }
         else
         {
