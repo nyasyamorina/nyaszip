@@ -34,7 +34,8 @@ Currently I'm using [Bandizip](https://www.bandisoft.com/bandizip/) (definitely 
 
 ### TODO Lists
 
-- auto process files with command line input
+- add progress bar
+- more beautifuller output message
 - use file `nyaszip.toml` to indicate file configurations
 
 **todo**

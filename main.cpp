@@ -1,4 +1,6 @@
 #include <iostream>
+#include <chrono>
+#include <filesystem>
 
 #define NYASZIP_WARN
 
@@ -6,33 +8,171 @@
 #include "toml.hpp" // from "https://github.com/ToruNiina/toml11"
 
 using namespace std;
+using namespace std::chrono;
+namespace fs = std::filesystem;
 using namespace nyaszip;
 
 
-int main(int argc, char ** argv) {
+/// @brief return zip file name and input files
+tuple<string, list<string>> process_input(int argc, char ** argv)
+{
+    string zip = "nyaszip-output.zip";
+    list<string> files;
 
-    auto zip = Zip::create("nyastestzip.zip");
-    zip.comment("https://github.com/nyasyamorina/nyaszip");
+    int idx = 1;
+    while (idx < argc)
+    {
+        char const* arg = argv[idx];
 
-    auto & aaa = zip.add("aaa.txt");
-    aaa.password("123456", 128);
-    aaa.write("the password of \"folder/test.txt\" is \"abcdef\"");
-    //aaa.close();  it will be automatically closed when add a new file or close the zip
+        if (strcmp(arg, "-o") == 0 || strcmp(arg, "--out") == 0)
+        {
+            if (idx + 1 < argc)
+            {
+                zip = argv[idx++];
+            }
+        }
+        else
+        {
+            files.push_back(arg);
+        }
+        idx++;
+    }
 
-    auto & test = zip.add("folder\\test.txt");
-    test.password("abcdef", 192);
-    test.write("The forgotten garbage that transcends all causes and effects.");
-    test.comment("Fin");
+    return {zip, files};
+}
 
-    auto & readme = zip.add("readme.txt");
-    readme.write("the password of \"aaa.txt\" is \"123456\"");
-    readme.comment("here is the entry");
-    readme.modified(MsDosTime(946684800));
 
-    // obviously, zip does not have any way to prevent duplicate files.
-    auto & test2 = zip.add("//folder/test.txt");
-    test2.password("not published password" /* AES-256 is the default encryption */);
-    test2.write("made by nyasyamorina");
+struct ZipCreateFailException : public exception
+{
+public:
+    string name;
 
+    ZipCreateFailException(string const& name_)
+    : name(name_) {}
+
+    virtual char const* what() const noexcept override
+    {
+        return "cannot create the zip file";
+    }
+};
+
+void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
+{
+    fs::path path = root / rel;
+    if (fs::is_directory(path))
+    {
+        u64 file_count = 0;
+        for (auto const& entry : fs::directory_iterator(path))
+        {
+            add_to(zip, root, rel / entry);
+            file_count += 1;
+        }
+        if (file_count == 0)
+        {
+            auto & empty_dir = zip.add(rel.string());
+            empty_dir.external_attribute(FileAttributes::Directory);
+        }
+    }
+    else if (fs::is_regular_file(path))
+    {
+        if (rel.filename() == "nyaszip.toml")
+        {
+            // TODO:
+            return;
+        }
+
+        cout << endl << "append: \"" << path << "\"" << endl;
+        ifstream in(path, ios::in | ios::binary);
+        if (in.fail())
+        {
+            cout << "cannot open file: \"" << path << "\", pass" << endl;
+            return;
+        }
+
+        auto & file = zip.add(rel.string());
+
+        auto modified = fs::last_write_time(path);
+        auto mtime = system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(modified - file_clock::now()));
+        file.modified(MsDosTime(mtime));
+        // 3.9GiB
+        constexpr u64 threshold = static_cast<u64>(3.9 * 1024 * 1024 * 1024);
+        if (fs::file_size(path) > threshold)
+        {
+            file.zip64(true);
+        }
+
+        auto buffer = reinterpret_cast<char *>(file.buffer());
+        if (buffer == nullptr)
+        {
+            cout << "cannot allocate buffer for file \"" << rel << "\", pass" << endl;
+            return;
+        }
+        u64 get_size;
+        do
+        {
+            in.read(buffer, file.buffer_length());
+            get_size = in.gcount();
+            file.flush_buff(get_size);
+        }
+        while (get_size == file.buffer_length());
+    }
+}
+
+void build_zip(string const& zip_name, list<string> const& files)
+{
+    Zip zip = Zip::create(zip_name);
+    if (zip.fail())
+    {
+        throw ZipCreateFailException(zip_name);
+    }
+
+    for (auto const& file : files)
+    {
+        fs::path root = fs::absolute(file);
+        fs::path rel = "";
+        while (rel.empty() && root.has_relative_path())
+        {
+            rel = root.filename();
+            root = root.parent_path();
+        }
+
+        if (rel.empty())
+        {
+            cout << "invalid filename: \"" << file << "\", pass" << endl;
+        }
+        else
+        {
+            add_to(zip, root, rel);
+        }
+    }
     zip.close();
+}
+
+void print_help()
+{
+    cout << "help document:" << endl;
+    cout << "=======================" << endl;
+    cout << endl;
+    cout << "    `nyaszip.exe [in1 [in2 [in3 ...]]] [-o out]`" << endl;
+}
+
+
+int main(int argc, char ** argv)
+{
+    if (argc < 2)
+    {
+        print_help();
+        return 0;
+    }
+
+    auto [zip, files] = process_input(argc, argv);
+
+    try
+    {
+        build_zip(zip, files);
+    }
+    catch(exception const& e)
+    {
+        std::cerr << e.what() << '\n';
+    }
 }
