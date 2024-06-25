@@ -4,7 +4,7 @@
 
 ## file structure
 
-**should** use z64 if file size exceeds 0xFFFFFFFF.
+**should** use zip64 if file size exceeds 0xFFFFFFFF.
 
 **should** use little endian store all values.
 
@@ -31,13 +31,13 @@ file data can be empty if this is a folder.
 
 **must not** be compressed local file header.
 
-**must** set compressed/uncompressed size to -1 if using z64, and store the actual values in extra field.
+**must** set compressed/uncompressed size to -1 if using zip64, and store the actual values in extra field.
 
 **must** set crc-32, compressed/uncompressed size to 0 if 0x0008 of general purpose bit flag is set.
 
 **must** set crc-32 to 0 if using AE-2.
 
-**must** set uncompressed size to 0 if not using z64 and 0x2000 of general purpose bit flag is set.
+**must** set uncompressed size to 0 if not using zip64 and 0x2000 of general purpose bit flag is set.
 
 **must** use a unique hexadecimal mask file name if 0x2000 of general purpose bit flag is set.
 
@@ -73,14 +73,14 @@ last modified file time/date is MS-DOS format.
 
 - u32 - signature (0x08074B50, PK\x07\x08)
 - u32 - crc-32
-- u32 (u64 for z64) - compressed size
-- u32 (u64 for z64) - uncompressed size
+- u32 (u64 for zip64) - compressed size
+- u32 (u64 for zip64) - uncompressed size
 
 ## archive decryption header
 
 **must** exit if using Central Directory Encryption method.
 
-**must** use z64 if exit.
+**must** use zip64 if exit.
 
 ## archive extra data record
 
@@ -103,7 +103,7 @@ last modified file time/date is MS-DOS format.
 
 ## central directory header
 
-**must** set disk number start and relative offset of local header to -1 if using z64, and store the actual values in extra field.
+**must** set disk number start and relative offset of local header to -1 if using zip64, and store the actual values in extra field.
 
 - u32 - signature (0x02014B50, PK\x01\x02)
 - u16 - version made by
@@ -171,9 +171,9 @@ store the information on the central direction encryption.
 
 ## end of central directory record
 
-**should** use z64 if some value is too large, and set this value to -1.
+**should** use zip64 if some value is too large, and set this value to -1.
 
-**must** set number of this disk, number of the disk with the start of the central directory, total number of entries in the central directory on this disk, total number of entries in the central directory, size of the central directory and offset of start of central directory with respect to the starting disk number to -1 if using z64, and store the actual values in zip64 end of central directory record.
+**must** set (number of this disk), (number of the disk with the start of the central directory), (total number of entries in the central directory on this disk), (total number of entries in the central directory), (size of the central directory) and (offset of start of central directory with respect to the starting disk number) to -1 if using zip64, and store the actual values in zip64 end of central directory record.
 
 **must not** be compressed .ZIP file comment length.
 
@@ -197,7 +197,7 @@ store the information on the central direction encryption.
 - 2.1 - File is compressed using Deflate64(tm)
 - 2.5 - File is compressed using PKWARE DCL Implode
 - 2.7 - File is a patch data set
-- 4.5 - File uses z64 format extensions
+- 4.5 - File uses zip64 format extensions
 - 4.6 - File is compressed using BZIP2 compression*
 - 5.0 - File is encrypted using DES
 - 5.0 - File is encrypted using 3DES
@@ -300,7 +300,7 @@ uint32_t crc32(uint32_t crc, uint8_t byte) {
 - data 2
 - ...
 
-### z64 extra field:
+### zip64 extra field:
 
 **must** have fields are set to -1 in original header, other fields are optional.
 

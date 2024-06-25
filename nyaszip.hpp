@@ -1210,7 +1210,7 @@ namespace nyaszip
         static constexpr u16 Deflate      = 20;
         static constexpr u16 Deflate64    = 21;
         static constexpr u16 PatchDataSet = 27;
-        static constexpr u16 Zip64Format  = 45;
+        static constexpr u16 Zip64        = 45;
         static constexpr u16 BZip2        = 46;
         static constexpr u16 AEx          = 51;
         static constexpr u16 CDEncryption = 62;
@@ -1234,9 +1234,12 @@ namespace nyaszip
         ::std::ostream * _output;
         bool _owned_output;
         WritingState _state;
-        i64 _offset;    // zip start
-        i64 _cd_offset; // the central directory offset from zip start
+        i64 _offset;        // zip start
+        u64 _record_offset; // the zip64 record offset from zip start
+        u64 _cd_offset;     // the central directory offset from zip start
+        u64 _cd_size;
 
+        bool _zip64;
         ::std::list<LocalFile> _files;
         ::std::string _comment;
         PCG_XSH_RR _random;
@@ -1248,6 +1251,12 @@ namespace nyaszip
         {
             _state = WritingState::Writing;
             _offset = _output->tellp();
+            _record_offset = 0;
+            _cd_offset = 0;
+            _cd_size = 0;
+
+            _zip64 = false;
+            _comment = "";
         }
 
         void _gen_salt(u8 * salt, u64 length)
@@ -1268,11 +1277,38 @@ namespace nyaszip
         }
 
         void _write_central_direction();
+        void _write_zip64_record()
+        {
+            _record_offset = ::std::bit_cast<u64>(_tellp());
+
+            u8 record[56];
+            *reinterpret_cast<u32 *>(record +  0) = 0x06064B50;
+            *reinterpret_cast<u64 *>(record +  4) = 44;
+            *reinterpret_cast<u16 *>(record + 12) = VersionMadeOf;
+            *reinterpret_cast<u16 *>(record + 14) = VersionNeedToExtra::Zip64;
+            *reinterpret_cast<u32 *>(record + 16) = 0;
+            *reinterpret_cast<u32 *>(record + 20) = 0;
+            *reinterpret_cast<u64 *>(record + 24) = _files.size();
+            *reinterpret_cast<u64 *>(record + 32) = _files.size();
+            *reinterpret_cast<u64 *>(record + 40) = _cd_size;
+            *reinterpret_cast<u64 *>(record + 48) = _cd_offset;
+            _write(record, 56);
+        }
+        void _write_zip64_locator()
+        {
+            u8 locator[20];
+            *reinterpret_cast<u32 *>(locator +  0) = 0x07064B50;
+            *reinterpret_cast<u32 *>(locator +  4) = 0;
+            *reinterpret_cast<u64 *>(locator +  8) = _record_offset;
+            *reinterpret_cast<u32 *>(locator + 16) = 1;
+            _write(locator, 20);
+        }
         void _write_end_of_central_direction()
         {
+            u16 total_files = ::std::min(static_cast<u64>(0xFFFF), _files.size());
+            u32 cd_size =     ::std::min(static_cast<u64>(0xFFFFFFFF), _cd_size);
+            u32 cd_offset =   ::std::min(static_cast<u64>(0xFFFFFFFF), _cd_offset);
             u16 comment_length = _comment.size() & 0xFFFF;
-            u16 total_files = _files.size() & 0xFFFF;
-            i64 cd_size = _tellp() - _cd_offset;
 
             u8 end[22];
             *reinterpret_cast<u32 *>(end +  0) = 0x06054B50;
@@ -1281,7 +1317,7 @@ namespace nyaszip
             *reinterpret_cast<u16 *>(end +  8) = total_files;
             *reinterpret_cast<u16 *>(end + 10) = total_files;
             *reinterpret_cast<u32 *>(end + 12) = cd_size;
-            *reinterpret_cast<u32 *>(end + 16) = _cd_offset;
+            *reinterpret_cast<u32 *>(end + 16) = cd_offset;
             *reinterpret_cast<u16 *>(end + 20) = comment_length;
             _write(end, 22);
 
@@ -1305,13 +1341,47 @@ namespace nyaszip
             return *_output;
         }
 
+        /* from _output */
+
+        bool good() const
+        {
+            return _output->good();
+        }
+        bool fail() const
+        {
+            return _output->fail();
+        }
+        bool bad() const
+        {
+            return _output->bad();
+        }
+        auto rdstate() const
+        {
+            return _output->rdstate();
+        }
+
         WritingState state() const noexcept
         {
             return _state;
         }
-        bool z64() const noexcept
+        /// @brief only determined after the file is closed
+        bool zip64() noexcept
         {
-            return false;   // TODO:
+            if (_zip64) { return true; }
+            if (
+                _files.size() >= 0xFFFF     ||
+                _cd_size      >= 0xFFFFFFFF ||
+                _cd_offset    >= 0xFFFFFFFF
+            ) {
+                _zip64 = true;
+                return true;
+            }
+            return false;
+        }
+        /// @brief only determined after the file is closed
+        bool zip64() const noexcept
+        {
+            return _zip64;
         }
         bool central_directory_encrypt() const noexcept
         {
@@ -1346,6 +1416,11 @@ namespace nyaszip
             close_current();
             _state = WritingState::Closed;
             _write_central_direction();
+            if (zip64())
+            {
+                _write_zip64_record();
+                _write_zip64_locator();
+            }
             _write_end_of_central_direction();
 
             return *this;
@@ -1357,6 +1432,30 @@ namespace nyaszip
         friend class Zip;
     public:
         static constexpr u64 BUFFER_LENGTH = 4 * 1024;
+
+        struct SizeOverflowException : public ::std::exception
+        {
+        public:
+            u64 compressed_size;
+            u64 uncompressed_size;
+
+            SizeOverflowException(u64 cmpr, u64 uncmpr)
+            : compressed_size(cmpr), uncompressed_size(uncmpr) {}
+
+            virtual char const* what() const noexcept override
+            {
+                return "size overflow in LocalFile with zip64 format disable";
+            }
+
+            static void check(bool zip64, u64 cmpr, u64 uncmpr)
+            {
+                if (zip64) { return; }
+                if ((cmpr >= 0xFFFFFFFF) || (uncmpr >= 0xFFFFFFFF))
+                {
+                    throw SizeOverflowException(cmpr, uncmpr);
+                }
+            }
+        };
 
         struct InvalidFileNameException : public ::std::exception
         {
@@ -1396,11 +1495,11 @@ namespace nyaszip
 
     protected:
         Zip & _zip;
-        i64 _offset;    // the local file header offset from zip start
+        u64 _offset;    // the local file header offset from zip start
 
         WritingState _state;
         u8 * _buffer;
-        bool _z64;
+        bool _zip64;
         u16 _cmpr_version;
         AbstractCompression * _cmpr;
         u8 _aes_mode;
@@ -1418,11 +1517,12 @@ namespace nyaszip
 
         void _init()
         {
-            _offset = _zip._tellp();
+            // the offset of LocalFile cannot smaller than that of the zip file
+            _offset = ::std::bit_cast<u64>(_zip._tellp());
 
             _state = WritingState::Preparing;
             _buffer = nullptr;
-            _z64 = false;
+            _zip64 = false;
             _cmpr_version = VersionNeedToExtra::Default;
             _cmpr = nullptr;
             _aes_mode = 0;
@@ -1520,9 +1620,9 @@ namespace nyaszip
                 res = VersionNeedToExtra::Directory;
             }
             // TODO: File is a patch data set (27)
-            if (_z64)
+            if (_zip64 || (_offset >= 0xFFFFFFFF /* offset is not stored in local header, so the version of local header is not affected by this ? */))
             {
-                res = VersionNeedToExtra::Zip64Format;
+                res = VersionNeedToExtra::Zip64;
             }
             if (_zip.central_directory_encrypt())
             {
@@ -1535,9 +1635,31 @@ namespace nyaszip
             return ::std::max(_cmpr_version, ::std::max(_enpryption_version(), _functionality_version()));
         }
 
-        u16 _extra_field_length() const noexcept
+        void _get_crc_size(u32 * info) const
+        {
+            if (_flag & GeneralPurposeBitFlag::use_data_descriptor)
+            {
+                info[0] /* crc */               = 0;
+                info[1] /* compressed size */   = 0;
+                info[2] /* uncompressed size */ = 0;
+            }
+            else
+            {
+                info[0] /* crc */               = crc();
+                info[1] /* compressed size */   = static_cast<u32>(_compressed);
+                info[2] /* uncompressed size */ = static_cast<u32>(_uncompressed);
+            }
+            if (_zip64)
+            {
+                info[1] = 0xFFFFFFFF;
+                info[2] = 0xFFFFFFFF;
+            }
+        }
+
+        u16 _local_extra_length() const noexcept
         {
             u16 len = 0;
+            if (_zip64) { len += 20; }
             if (_aes_mode != 0) { len += 11; }
             return len;
         }
@@ -1552,21 +1674,27 @@ namespace nyaszip
             *reinterpret_cast<u16 *>(header +  8) = cmpr_method;
             *reinterpret_cast<u16 *>(header + 10) = _modified.time;
             *reinterpret_cast<u16 *>(header + 12) = _modified.date;
-            *reinterpret_cast<u32 *>(header + 14) = _crc;           // place holder
-            *reinterpret_cast<u32 *>(header + 18) = _compressed;    // place holder
-            *reinterpret_cast<u32 *>(header + 22) = _uncompressed;  // place holder
+            _get_crc_size(reinterpret_cast<u32 *>(header + 14));
             *reinterpret_cast<u16 *>(header + 26) = file_name_length;
-            *reinterpret_cast<u16 *>(header + 28) = _extra_field_length();
+            *reinterpret_cast<u16 *>(header + 28) = _local_extra_length();
             _zip._write(header, 30);
 
             _zip._write(_name.c_str(), file_name_length);
-            _write_extra_field();
+            _write_local_extra();
         }
-        void _write_extra_field() const
+        void _write_local_extra() const
         {
+            u8 field[20];
+            if (_zip64)
+            {
+                *reinterpret_cast<u16 *>(field + 0)  = 0x0001;
+                *reinterpret_cast<u16 *>(field + 2)  = 0x0010;
+                *reinterpret_cast<u64 *>(field + 4)  = _uncompressed;
+                *reinterpret_cast<u64 *>(field + 12) = _compressed;
+                _zip._write(field, 20);
+            }
             if (_aes_mode != 0)
             {
-                u8 field[11];
                 *reinterpret_cast<u16 *>(field + 0) = 0x9901;
                 *reinterpret_cast<u16 *>(field + 2) = 0x0007;
                 *reinterpret_cast<u16 *>(field + 4) = 0x0002;   // ZIP AE-2
@@ -1634,39 +1762,35 @@ namespace nyaszip
 
         /* Writing => Closed */
 
-        void _get_header_info(u32 * info) const
-        {
-            if (_flag & GeneralPurposeBitFlag::use_data_descriptor)
-            {
-                info[0] /* crc */               = 0;
-                info[1] /* compressed size */   = 0;
-                info[2] /* uncompressed size */ = 0;
-            }
-            else
-            {
-                info[0] /* crc */               = crc();
-                info[1] /* compressed size */   = _compressed;
-                info[2] /* uncompressed size */ = _uncompressed;
-            }
-        }
         void _update_local_header() const
         {
-            u8 tmp[12];
-            _get_header_info(reinterpret_cast<u32 *>(tmp));
+            u8 tmp[16];
             auto pos = _zip._tellp();
+            /* update static local header */
             _zip._seekp(_offset + 14);
+            _get_crc_size(reinterpret_cast<u32 *>(tmp));
             _zip._write(tmp, 12);
+            /* update zip64 extra field */
+            if (_zip64)
+            {
+                u16 file_name_length = _name.size() & 0xFFFF;
+                _zip._seekp(_offset + 34 + file_name_length);
+                *reinterpret_cast<u64 *>(tmp + 0) = _uncompressed;
+                *reinterpret_cast<u64 *>(tmp + 8) = _compressed;
+                _zip._write(tmp, 16);
+            }
             _zip._seekp(pos);
         }
         void _write_data_descriptor() const
         {
+            /* it seems that only a few software support data descriptor */
             if (_flag & GeneralPurposeBitFlag::use_data_descriptor)
             {
                 u8 tmp[24];
                 *reinterpret_cast<u32 *>(tmp + 0) = 0x08074B50;
                 *reinterpret_cast<u32 *>(tmp + 4) = crc();
 
-                if (_zip.z64())
+                if (_zip64)
                 {
                     *reinterpret_cast<u64 *>(tmp +  8) = _compressed;
                     *reinterpret_cast<u64 *>(tmp + 16) = _uncompressed;
@@ -1681,11 +1805,29 @@ namespace nyaszip
             }
         }
 
+        u16 _central_extra_length() const
+        {
+            u16 len = 0;
+            //if (_zip64)  must use zip64 format if offset is greater than 0xFFFFFFFE
+            {
+                u16 z64_len = 4;
+                if (_uncompressed >= 0xFFFFFFFF) { z64_len += 8; }
+                if (_compressed   >= 0xFFFFFFFF) { z64_len += 8; }
+                if (_offset       >= 0xFFFFFFFF) { z64_len += 8; }
+                if (z64_len > 4) { len += z64_len; }
+            }
+            if (_aes_mode != 0) { len += 11; }
+            return len;
+        }
         void _write_cd_header() const
         {
             u16 cmpr_method = _aes_mode != 0 ? 99 : _cmpr_method;
             u16 file_name_length = _name.size() & 0xFFFF;
             u16 comment_length = _comment.size() & 0xFFFF;
+            /* zip64 */
+            u32 uncmpr = ::std::min(static_cast<u64>(0xFFFFFFFF), _uncompressed);
+            u32 cmpr   = ::std::min(static_cast<u64>(0xFFFFFFFF), _compressed);
+            u32 offs_  = ::std::min(static_cast<u64>(0xFFFFFFFF), _offset);
 
             u8 header[46];
             *reinterpret_cast<u32 *>(header +  0) = 0x02014B50;
@@ -1695,19 +1837,57 @@ namespace nyaszip
             *reinterpret_cast<u16 *>(header + 10) = cmpr_method;
             *reinterpret_cast<u16 *>(header + 12) = _modified.time;
             *reinterpret_cast<u16 *>(header + 14) = _modified.date;
-            _get_header_info(reinterpret_cast<u32 *>(header + 16));
+            _get_crc_size(reinterpret_cast<u32 *>(header + 16));
+            *reinterpret_cast<u32 *>(header + 20) = cmpr;
+            *reinterpret_cast<u32 *>(header + 24) = uncmpr;
             *reinterpret_cast<u16 *>(header + 28) = file_name_length;
-            *reinterpret_cast<u16 *>(header + 30) = _extra_field_length();
+            *reinterpret_cast<u16 *>(header + 30) = _central_extra_length();
             *reinterpret_cast<u16 *>(header + 32) = comment_length;
             *reinterpret_cast<u16 *>(header + 34) = 0;
             *reinterpret_cast<u16 *>(header + 36) = 0;
             *reinterpret_cast<u32 *>(header + 38) = _external;
-            *reinterpret_cast<u32 *>(header + 42) = _offset;
+            *reinterpret_cast<u32 *>(header + 42) = offs_;
             _zip._write(header, 46);
 
             _zip._write(_name.c_str(), file_name_length);
-            _write_extra_field();
+            _write_central_extra();
             _zip._write(_comment.c_str(), comment_length);
+        }
+        void _write_central_extra() const
+        {
+            u8 field[28];
+            //if (_zip64)  must use zip64 format if offset is greater than 0xFFFFFFFE
+            {
+                u8 * data = field + 4;
+                *reinterpret_cast<u16 *>(field + 0) = 0x0001;
+                *reinterpret_cast<u16 *>(field + 2) = 0;
+                if (_uncompressed >= 0xFFFFFFFF) {
+                    *reinterpret_cast<u64 *>(data) = _uncompressed;
+                    *reinterpret_cast<u16 *>(field + 2) += 8; data += 8;
+                }
+                if (_compressed >= 0xFFFFFFFF) {
+                    *reinterpret_cast<u64 *>(data) = _compressed;
+                    *reinterpret_cast<u16 *>(field + 2) += 8; data += 8;
+                }
+                if (_offset >= 0xFFFFFFFF) {
+                    *reinterpret_cast<u64 *>(data) = _offset;
+                    *reinterpret_cast<u16 *>(field + 2) += 8; data += 8;
+                }
+                if (data - field > 4)
+                {
+                    _zip._write(field, data - field);
+                }
+            }
+            if (_aes_mode != 0)
+            {
+                *reinterpret_cast<u16 *>(field + 0) = 0x9901;
+                *reinterpret_cast<u16 *>(field + 2) = 0x0007;
+                *reinterpret_cast<u16 *>(field + 4) = 0x0002;   // ZIP AE-2
+                field[6] = 'A'; field[7] = 'E';
+                field[8] = _aes_mode;
+                *reinterpret_cast<u16 *>(field + 9) = _cmpr_method;
+                _zip._write(field, 11);
+            }
         }
 
     public:
@@ -1738,9 +1918,9 @@ namespace nyaszip
         {
             return _state;
         }
-        bool z64() const noexcept
+        bool zip64() const noexcept
         {
-            return _z64;
+            return _zip64;
         }
         u16 version_need_to_extra() const noexcept
         {
@@ -1783,6 +1963,13 @@ namespace nyaszip
             return _external;
         }
 
+        /// @brief set the file enable zip64 format or not, will throw error if not enble (default) and write in more than 4GB data
+        LocalFile & zip64(bool enable = true)
+        {
+            ensure<WritingState::Preparing>::check(_state);
+            _zip64 = enable;
+            return *this;
+        }
         LocalFile & name(::std::string const& name_)
         {
             ensure<WritingState::Preparing>::check(_state);
@@ -1905,6 +2092,7 @@ namespace nyaszip
             {
                 _flush_buffer(length);
             }
+            SizeOverflowException::check(_zip64, _compressed, _uncompressed);
             return *this;
         }
         LocalFile & write(u8 const* data, u64 length)
@@ -1921,6 +2109,7 @@ namespace nyaszip
                 _flush_buffer(flush_length);
                 data += flush_length; length -= flush_length;
             }
+            SizeOverflowException::check(_zip64, _compressed, _uncompressed);
             return *this;
         }
         LocalFile & write(::std::string const& data)
@@ -1933,6 +2122,10 @@ namespace nyaszip
             if (_state == WritingState::Closed) { return *this; }
             if (_uncompressed == 0) {
                 // zero-length file or directory cannot have compression and enpryption
+                if (_state == WritingState::Preparing)
+                {
+                    _zip64 = false;
+                }
                 _rm_cmpr();
                 _rm_aes();
                 _write_local_header();
@@ -1969,11 +2162,12 @@ namespace nyaszip
     }
     void Zip::_write_central_direction()
     {
-        _cd_offset = _tellp();
+        _cd_offset = ::std::bit_cast<u64>(_tellp());
         for (LocalFile const& file : _files)
         {
             file._write_cd_header();
         }
+        _cd_size = ::std::bit_cast<u64>(_tellp()) - _cd_offset;
     }
     Zip & Zip::close_current()
     {

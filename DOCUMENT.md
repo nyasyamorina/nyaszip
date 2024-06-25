@@ -62,11 +62,13 @@ You can use `Zip::add(string file_name)` to add a file into the zip, see above.
 
 Use the `state()` method to get the `WritingState` of the file, it will be `Preparing` after created.
 
-During the `Preparing` state, you can set some property for the file, like changing file name or comment, specifyinf the file name and the comment are the utf-8 encoded, setting the file attribute using `external_attribute(u32)`, changing the last modified time,
+During the `Preparing` state, you can set some property for the file, like changing file name or comment, specifying the file name and the comment are the utf-8 encoded, setting the file attribute using `external_attribute(u32)`, changing the last modified time,
 
 But the most useful thing here is using `password(string)` to set the password for the file, note that the password can be empty. Also you can use `password(nullptr)` to unset the password.
 
-The default encrytion is AES-256, you can specify the AES mod after the password argument: `password(string, u16 bits)`, where bits can be 128, 192 or 256.
+The default encrytion is AES-256, you can specify the AES mod after the password argument: `password(string, u16 bits)`, where `bits` can be 128, 192 or 256.
+
+Please call `zip64(true)` during the `Preparing` state to declare the file size may be larger than 4GB, otherwise, it will throw an error if writing over 4GB data.
 
 You can start writing data into file after preparing by calling `start()` method. Calling this method is optional, it will be automatically called before actually writing data.
 
@@ -83,6 +85,8 @@ There are few thing can be changed after file closed, or even before the zip wri
 ---
 
 ## TODO Lists (not sorted)
+
+- implantment `LocalFile : streambuf` for using `ostream` wrap araound it to `<<`
 
 - use `u8string` instead of `string` to store file names and comments
 
