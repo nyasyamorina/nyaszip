@@ -13,6 +13,15 @@ namespace fs = std::filesystem;
 using namespace nyaszip;
 
 
+void print_help()
+{
+    cout << "help document:" << endl;
+    cout << "=======================" << endl;
+    cout << endl;
+    cout << "    `nyaszip.exe [in1 [in2 [in3 ...]]] [-o out]`" << endl;
+}
+
+
 /// @brief return zip file name and input files
 tuple<string, list<string>> process_input(int argc, char ** argv)
 {
@@ -31,6 +40,11 @@ tuple<string, list<string>> process_input(int argc, char ** argv)
             {
                 zip = argv[idx];
             }
+        }
+        else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0)
+        {
+            print_help();
+            exit(0);
         }
         else
         {
@@ -61,10 +75,6 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
 {
     fs::path path = root / rel;
 
-    cout << endl << "append: " << path << endl;
-    cout << "root: " << root << endl;
-    cout << "rel: " << rel << endl;
-
     if (fs::is_directory(path))
     {
         u64 file_count = 0;
@@ -87,9 +97,7 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
             return;
         }
 
-        /*cout << endl << "append: " << path << endl;
-        cout << "root: " << root << endl;
-        cout << "rel: " << rel << endl;*/
+        cout << endl << "append: " << path << endl;
         ifstream in(path, ios::in | ios::binary);
         if (in.fail())
         {
@@ -98,7 +106,6 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
         }
 
         auto & file = zip.add(rel.string());
-        cout << "name: " << file.name() << endl;
 
         auto modified = fs::last_write_time(path);
         auto mtime = system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(modified - file_clock::now()));
@@ -154,15 +161,8 @@ void build_zip(string const& zip_name, list<string> const& files)
             add_to(zip, root, rel);
         }
     }
-    zip.close();
-}
-
-void print_help()
-{
-    cout << "help document:" << endl;
-    cout << "=======================" << endl;
     cout << endl;
-    cout << "    `nyaszip.exe [in1 [in2 [in3 ...]]] [-o out]`" << endl;
+    zip.close();
 }
 
 
