@@ -13,6 +13,12 @@ namespace fs = std::filesystem;
 using namespace nyaszip;
 
 
+template<class clock> inline i64 to_time(time_point<clock> const& t)
+{
+    return system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(t - clock::now()));
+}
+
+
 void print_help()
 {
     cout << "help document:" << endl;
@@ -77,16 +83,17 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
 
     if (fs::is_directory(path))
     {
-        u64 file_count = 0;
+        bool empty_dir = true;
         for (auto const& entry : fs::directory_iterator(path))
         {
             add_to(zip, root, rel / entry.path().filename());
-            file_count += 1;
+            empty_dir = false;
         }
-        if (file_count == 0)
+        if (empty_dir)
         {
-            auto & empty_dir = zip.add(rel.string());
-            empty_dir.external_attribute(FileAttributes::Directory);
+            cout << endl << "append: " << path << endl;
+            auto & dir = zip.add(rel.string());
+            dir.external_attribute(FileAttributes::Directory);
         }
     }
     else if (fs::is_regular_file(path))
@@ -107,14 +114,18 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
 
         auto & file = zip.add(rel.string());
 
-        auto modified = fs::last_write_time(path);
-        auto mtime = system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(modified - file_clock::now()));
-        file.modified(MsDosTime(mtime));
+        auto modified = to_time(fs::last_write_time(path));
+        file.modified(MsDosTime(modified));
         // 3.999GiB, assume other thing in local file data except real file data is less than 1MiB
         constexpr u64 threshold = static_cast<u64>(3.999 * 1024 * 1024 * 1024);
-        if (fs::file_size(path) > threshold)
+        u64 size = fs::file_size(path);
+        if (size > threshold)
         {
             file.zip64(true);
+        }
+        else if (size == 0)
+        {
+            return;
         }
 
         auto buffer = reinterpret_cast<char *>(file.buffer());

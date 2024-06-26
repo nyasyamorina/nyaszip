@@ -1989,6 +1989,7 @@ namespace nyaszip
             {
                 throw InvalidFileNameException(name_);
             }
+            _name = safe_name_;
             return *this;
         }
         LocalFile & comment(::std::string comment_)
@@ -2123,12 +2124,9 @@ namespace nyaszip
         LocalFile & close()
         {
             if (_state == WritingState::Closed) { return *this; }
-            if (_uncompressed == 0) {
+            if (_state == WritingState::Preparing) {
                 // zero-length file or directory cannot have compression and enpryption
-                if (_state == WritingState::Preparing)
-                {
-                    _zip64 = false;
-                }
+                _zip64 = false;
                 _rm_cmpr();
                 _rm_aes();
                 _write_local_header();

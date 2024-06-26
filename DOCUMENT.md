@@ -86,6 +86,8 @@ There are few thing can be changed after file closed, or even before the zip wri
 
 ## TODO Lists (not sorted)
 
+- more modern way of storing the last modified times
+
 - implantment `LocalFile : streambuf` for using `ostream` wrap araound it to `<<`
 
 - use `u8string` instead of `string` to store file names and comments
