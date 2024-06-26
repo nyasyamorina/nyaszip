@@ -57,7 +57,7 @@ tuple<string, list<string>> process_input(int argc, char ** argv)
 }
 
 
-struct ZipCreateFailException : public exception
+struct ZipCreateFailException : public std::exception
 {
 public:
     string name;
@@ -110,19 +110,14 @@ void add_to(Zip & zip, fs::path const& root, fs::path const& rel)
         auto modified = fs::last_write_time(path);
         auto mtime = system_clock::to_time_t(system_clock::now() + duration_cast<system_clock::duration>(modified - file_clock::now()));
         file.modified(MsDosTime(mtime));
-        // 3.9GiB
-        constexpr u64 threshold = static_cast<u64>(3.9 * 1024 * 1024 * 1024);
+        // 3.999GiB, assume other thing in local file data except real file data is less than 1MiB
+        constexpr u64 threshold = static_cast<u64>(3.999 * 1024 * 1024 * 1024);
         if (fs::file_size(path) > threshold)
         {
             file.zip64(true);
         }
 
         auto buffer = reinterpret_cast<char *>(file.buffer());
-        if (buffer == nullptr)
-        {
-            cout << "cannot allocate buffer for " << rel << endl;
-            return;
-        }
         u64 get_size;
         do
         {
@@ -180,7 +175,7 @@ int main(int argc, char ** argv)
     {
         build_zip(zip, files);
     }
-    catch(exception const& e)
+    catch(std::exception const& e)
     {
         std::cerr << e.what() << '\n';
     }
