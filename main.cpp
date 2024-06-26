@@ -27,6 +27,42 @@ void print_help()
     cout << "    `nyaszip.exe [in1 [in2 [in3 ...]]] [-o out]`" << endl;
 }
 
+void _build_test_zip()
+{
+    auto zip = Zip::create("nyastestzip.zip");
+    zip.comment("https://github.com/nyasyamorina/nyaszip");
+
+    auto & aaa = zip.add("aaa.txt");
+    aaa.password("123456", 128);
+    aaa.write("the password of \"folder/test.txt\" is \"abcdef\"");
+    //aaa.close();  it will be automatically closed when add a new file or close the zip
+
+    auto & test = zip.add("folder\\test.txt");
+    test.password("abcdef", 192);
+    test.write("The forgotten garbage that transcends all causes and effects.");
+    test.comment("Fin");
+
+    auto & trash = zip.add("\\\\just\\for\\testing");
+    trash.zip64(true);
+    for (u64 total = 0; total < 6746518852 /* 2pi GB */; total += trash.buffer_length())
+    {
+        trash.flush_buff(trash.buffer_length());
+    }
+    trash.comment("Don't open !!!");
+
+    auto & readme = zip.add("readme.txt");
+    readme.write("the password of \"aaa.txt\" is \"123456\"");
+    readme.comment("here is the entry");
+    readme.modified(MsDosTime(946684800));
+
+    // obviously, zip does not have any way to prevent duplicate files.
+    auto & test2 = zip.add("folder\\test.txt");
+    test2.password("not published password" /* AES-256 is the default encryption */);
+    test2.write("made by nyasyamorina");
+
+    zip.close();
+}
+
 
 /// @brief return zip file name and input files
 tuple<string, list<string>> process_input(int argc, char ** argv)
@@ -174,6 +210,8 @@ void build_zip(string const& zip_name, list<string> const& files)
 
 int main(int argc, char ** argv)
 {
+    //_build_test_zip();
+
     if (argc < 2)
     {
         print_help();

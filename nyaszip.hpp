@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <ctime>
 #include <bit>
+#include <array>
 #include <list>
 #include <tuple>
 #include <string>
@@ -222,7 +223,8 @@ namespace nyaszip
         }
     };
 
-    static u32 crc32(u32 crc /* set to 0 first */, u8 const* data, u64 length)
+    [[maybe_unused]]    // keep this method to show how crc-32 works
+    static u32 _crc32(u32 crc /* set to 0 first */, u8 const* data, u64 length)
     {
         u64 buff[1];
         // pre-conditioning
@@ -253,6 +255,37 @@ namespace nyaszip
         }
         // post-conditioning
         return ~static_cast<u32>(*buff);
+    }
+
+    static constexpr u32 crc32(u8 value)
+    {
+        u64 buff = value;
+        constexpr u64 divisor = (static_cast<u64>(0xEDB88320) << 1) | 1;
+        for (u8 flag = 0xFF; flag; flag >>= 1)
+        {
+            if (buff & 1) { buff ^= divisor; }
+            buff >>= 1;
+        }
+        return buff;
+    }
+    static constexpr ::std::array<u32, 256> _gen_crc32_table()
+    {
+        ::std::array<u32, 256> res;
+        u8 value = 0;
+        ::std::for_each(res.begin(), res.end(), [&value](u32 & crc) { crc = crc32(value++); });
+        return res;
+    }
+    static auto const crc32_table = _gen_crc32_table();
+    static inline u32 crc32(u32 crc /* set to 0 first */, u8 const* data, u64 length)
+    {
+        u8 const* const end = data + length;
+        u32 tmp = ~crc; // pre-conditioning
+        for (; data < end; data++)
+        {
+            tmp ^= *data;
+            tmp = (tmp >> 8) ^ crc32_table[tmp & 0xFF];
+        }
+        return ~tmp;    // post-conditioning
     }
 
     template<typename T> class GF2poly
@@ -323,21 +356,11 @@ namespace nyaszip
         }
     };
 
-    /// @brief the AES encrption
-    /// @tparam bits only can be 128, 192 or 256.
-    template<u16 bits> class AES
+    class AES_basic  // store algorithms used in AES
     {
-        static_assert(bits == 128 || bits == 192 || bits == 256,
-        "got an unsupported AES mode");
-
     public:
         static constexpr u16 GF2_POLY_DIVISOR = 0x011B;
-        static constexpr u8 KEY_LENGTH = bits / 8;
-        static constexpr u8 Nk = KEY_LENGTH / 4;
-        static constexpr u8 Nr = Nk + 6;
-        static constexpr u8 ROUND_KEY_LENGTH = 16 * (Nr + 1);
-        static constexpr u8 STATE_LENGTH = 16;
-        static constexpr u8 BLOCK_LENGTH = STATE_LENGTH;
+
 
         static constexpr inline u8 rcon(u8 i) noexcept
         {
@@ -370,7 +393,8 @@ namespace nyaszip
             return u8s_to_u32(r0, r1, r2, r3);
         }
 
-        static constexpr inline u8 sub_byte(u8 x) noexcept
+        [[maybe_unused]]    // keep this method to show how sub_byte works
+        static constexpr inline u8 _sub_byte(u8 x) noexcept
         {
             u8 inv = byte_inv(x);
             // linear transform
@@ -378,6 +402,20 @@ namespace nyaszip
             // add a constant
             return trans ^ 0x63;
         }
+
+        static constexpr ::std::array<u8, 256> _gen_sbox() noexcept
+        {
+            ::std::array<u8, 256> res;
+            u8 value = 0;
+            ::std::for_each(res.begin(), res.end(), [&value](u8 & sb) { sb = _sub_byte(value++); });
+            return res;
+        }
+        static ::std::array<u8, 256> const SBox;
+        static const inline u8 sub_byte(u8 x) noexcept
+        {
+            return SBox[x];
+        }
+
         static constexpr inline u32 sub_bytes(u32 x) noexcept
         {
             auto [x0, x1, x2, x3] = u32_to_u8s(x);
@@ -393,7 +431,7 @@ namespace nyaszip
             words[3] = sub_bytes(words[3]);
         }
 
-        static void shift_rows(u8 * state)
+        static inline void shift_rows(u8 * state)
         {
             using ::std::exchange;
             // (1,0 | 1,1 | 1,2 | 1,3) => (1,1 | 1,2 | 1,3 | 1,0)
@@ -403,7 +441,7 @@ namespace nyaszip
             // (3,0 | 3,1 | 3,2 | 3,3) => (3,3 | 3,0 | 3,1 | 3,2)
             state[3] = exchange(state[15], exchange(state[11], exchange(state[7], state[3])));
         }
-        static void mix_cols(u8 * state)
+        static inline void mix_cols(u8 * state)
         {
             auto words = reinterpret_cast<u32 *>(state);
             words[0] = word_mul(0x03010102, words[0]);
@@ -411,10 +449,27 @@ namespace nyaszip
             words[2] = word_mul(0x03010102, words[2]);
             words[3] = word_mul(0x03010102, words[3]);
         }
-        static void add_round_key(u8 * state, u8 const* rkey)
+        static inline void add_round_key(u8 * state, u8 const* rkey)
         {
             xor_to<16>(state, rkey);
         }
+    };
+    auto const AES_basic::SBox = AES_basic::_gen_sbox();
+
+    /// @brief the AES encrption
+    /// @tparam bits only can be 128, 192 or 256.
+    template<u16 bits> class AES : public AES_basic
+    {
+        static_assert(bits == 128 || bits == 192 || bits == 256,
+        "got an unsupported AES mode");
+
+    public:
+        static constexpr u8 KEY_LENGTH = bits / 8;
+        static constexpr u8 Nk = KEY_LENGTH / 4;
+        static constexpr u8 Nr = Nk + 6;
+        static constexpr u8 ROUND_KEY_LENGTH = 16 * (Nr + 1);
+        static constexpr u8 STATE_LENGTH = 16;
+        static constexpr u8 BLOCK_LENGTH = STATE_LENGTH;
 
     protected:
         u8 _round_key[ROUND_KEY_LENGTH];
