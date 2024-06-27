@@ -1,0 +1,15 @@
+# this configuration will overwrite the "nyaszip.toml" in "nyastest"
+
+password = 0    # unset the password for all files in "nyastest/dir2"
+
+["A.txt"]
+password = "AAA"
+AES = 256
+
+["final.txt"]
+password = "the end?"
+comment = "Fin"
+
+["congratulations.txt"]
+password = ""   # yeah, the empty password is valid
+content = "..."

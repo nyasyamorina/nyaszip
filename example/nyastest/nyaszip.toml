@@ -1,0 +1,25 @@
+# there are 5 keys that configurate the zip file:
+# - password: set the password for all files in this directory.
+# - AES: set the AES mode for encrytion.
+# - modified: set the last modified time for all files in this directory.
+# - comment: set the comment for the specified file.
+# - content: create a file in the zip file that is not on disk, and specify the content of this file.
+
+password = "nyaszip" # set this password to all files in "nyastest"
+
+["README.txt"]  # Due to the design of toml, the character '.' is equivalent to the path separator '/' in "nyaszip.toml", please use double quotes '"' to enclose the file name
+password = 0    # unset the password for "nyastest/README.txt"
+modified = 2022-02-22T22:22:22  # set the last modified time for "nyastest/README.txt"
+comment = "Here is the entry"   # set the comment for "nyastest/README.txt"
+
+[dir1]
+AES = 128   # set the AES mode to 128 for all files in "nyastest/dir1"
+
+#[dir1]     # toml does not allow two tables to have the same name
+#password = "dir1"
+
+[dir1."test content.txt"] # equivalent to "dir1/test content.txt"
+content = "Here is the file that is not on disk."
+
+[dir2]  # this table would not work because of there is a "nyaszip.toml" in "nyastest/dir2"
+password = "password"

@@ -14,7 +14,7 @@
 #include <exception>
 #include <fstream>
 #ifdef NYASZIP_WARN
-#   include <iostream>
+#include <iostream>
 #endif
 
 typedef uint8_t  u8;
@@ -2036,18 +2036,22 @@ namespace nyaszip
             _zip64 = enable;
             return *this;
         }
-        LocalFile & name(::std::string name_)
+        LocalFile & name(::std::string const& name_)
         {
             ensure<WritingState::Preparing>::check(_state);
             auto safe_name_ = safe_file_name(name_);
+#ifndef NYASZIP_ALLOW_EMPTY_FILENAME
             if (safe_name_.empty())
             {
+                // note that the zip file is not preventing users from entering an empty file name,
+                // but the extraction behavior is not well defined.
                 throw InvalidFileNameException(name_);
             }
+#endif
             _name = safe_name_;
             return *this;
         }
-        LocalFile & comment(::std::string comment_)
+        LocalFile & comment(::std::string const& comment_)
         {
             ensure_not<WritingState::Closed>::check(_zip.state());
             _comment = comment_;
@@ -2110,7 +2114,7 @@ namespace nyaszip
             return *this;
         }
         // set the password
-        LocalFile & password(::std::string password_, u16 AES_bits = 256)
+        LocalFile & password(::std::string const& password_, u16 AES_bits = 256)
         {
             return password(reinterpret_cast<u8 const*>(password_.c_str()), password_.size(), AES_bits);
         }
@@ -2171,7 +2175,7 @@ namespace nyaszip
             SizeOverflowException::check(_zip64, _compressed, _uncompressed);
             return *this;
         }
-        LocalFile & write(::std::string data)
+        LocalFile & write(::std::string const& data)
         {
             return write(reinterpret_cast<u8 const*>(data.c_str()), data.size());
         }
