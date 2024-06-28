@@ -404,11 +404,9 @@ namespace nyaszip
             return trans ^ 0x63;
         }
 
-        static constexpr ::std::array<u32, 256> _gen_word_mul_table(u8 byte_idx) noexcept
+        static constexpr ::std::array<u32, 256> _gen_word_mul_table() noexcept
         {
-            u32 x = 0x03010102;
-            x = ::std::rotl(x, 8 * byte_idx);
-            auto const [x0, x1, x2, x3] = u32_to_u8s(x);
+            auto [x0, x1, x2, x3] = u32_to_u8s(0x03010102);
 
             ::std::array<u32, 256> res;
             u8 y = 0;
@@ -422,14 +420,15 @@ namespace nyaszip
             });
             return res;
         }
-        static ::std::array<u32, 256> const WordMul00;
-        static ::std::array<u32, 256> const WordMul01;
-        static ::std::array<u32, 256> const WordMul02;
-        static ::std::array<u32, 256> const WordMul03;
-        static inline u32 word_mul_0x03010102(u32 y)
+        static ::std::array<u32, 256> const ByteMul0x03010102;
+        static inline u32 word_mul_0x03010102(u32 y) noexcept
         {
             auto [y0, y1, y2, y3] = u32_to_u8s(y);
-            return WordMul00[y0] ^ WordMul01[y1] ^ WordMul02[y2] ^ WordMul03[y3];
+            u32 r0 =             ByteMul0x03010102[y0];
+            u32 r1 = ::std::rotl(ByteMul0x03010102[y1],  8);
+            u32 r2 = ::std::rotl(ByteMul0x03010102[y2], 16);
+            u32 r3 = ::std::rotl(ByteMul0x03010102[y3], 24);
+            return r0 ^ r1 ^ r2 ^ r3;
         }
 
         static constexpr ::std::array<u8, 256> _gen_sbox() noexcept
@@ -483,10 +482,7 @@ namespace nyaszip
             xor_to<16>(state, rkey);
         }
     };
-    auto const AES_basic::WordMul00 = AES_basic::_gen_word_mul_table(0x00);
-    auto const AES_basic::WordMul01 = AES_basic::_gen_word_mul_table(0x01);
-    auto const AES_basic::WordMul02 = AES_basic::_gen_word_mul_table(0x02);
-    auto const AES_basic::WordMul03 = AES_basic::_gen_word_mul_table(0x03);
+    auto const AES_basic::ByteMul0x03010102 = AES_basic::_gen_word_mul_table();
     auto const AES_basic::SBox = AES_basic::_gen_sbox();
 
     /// @brief the AES encrption
