@@ -98,6 +98,4 @@ There are few thing can be changed after file closed, or even before the zip wri
 
 - add the Strong Encryption to encrypt file path (maybe will not added, because the Strong Encryption will make the zip file only use one password)
 
-- add ZIP64 format to supported the zip file lager than 4GiB
-
 - add the multi volume archive support

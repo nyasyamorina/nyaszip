@@ -379,7 +379,8 @@ namespace nyaszip
         {
             return static_cast<u8>(GF2poly<u16>::invmodmul(static_cast<u16>(x), GF2_POLY_DIVISOR));
         }
-        static constexpr u32 word_mul(u32 X, u32 Y) noexcept
+        [[maybe_unused]]
+        static constexpr u32 _word_mul(u32 X, u32 Y) noexcept
         {
             // both `X` and `Y` are two-variable polynomial `B₃y³ + B₂y² + B₁y¹ + B₀y⁰`
             // that be stored as `B₀2⁰ + B₁2⁸ + B₂2¹⁶ + B₃2²⁴` in a word,
@@ -403,6 +404,34 @@ namespace nyaszip
             return trans ^ 0x63;
         }
 
+        static constexpr ::std::array<u32, 256> _gen_word_mul_table(u8 byte_idx) noexcept
+        {
+            u32 x = 0x03010102;
+            x = ::std::rotl(x, 8 * byte_idx);
+            auto const [x0, x1, x2, x3] = u32_to_u8s(x);
+
+            ::std::array<u32, 256> res;
+            u8 y = 0;
+            ::std::for_each(res.begin(), res.end(), [x0, x1, x2, x3, &y](u32 & word) {
+                u8 r0 = byte_mul(x0, y);
+                u8 r1 = byte_mul(x1, y);
+                u8 r2 = byte_mul(x2, y);
+                u8 r3 = byte_mul(x3, y);
+                y++;
+                word = u8s_to_u32(r0, r1, r2, r3);
+            });
+            return res;
+        }
+        static ::std::array<u32, 256> const WordMul00;
+        static ::std::array<u32, 256> const WordMul01;
+        static ::std::array<u32, 256> const WordMul02;
+        static ::std::array<u32, 256> const WordMul03;
+        static inline u32 word_mul_0x03010102(u32 y)
+        {
+            auto [y0, y1, y2, y3] = u32_to_u8s(y);
+            return WordMul00[y0] ^ WordMul01[y1] ^ WordMul02[y2] ^ WordMul03[y3];
+        }
+
         static constexpr ::std::array<u8, 256> _gen_sbox() noexcept
         {
             ::std::array<u8, 256> res;
@@ -411,7 +440,7 @@ namespace nyaszip
             return res;
         }
         static ::std::array<u8, 256> const SBox;
-        static const inline u8 sub_byte(u8 x) noexcept
+        static inline u8 sub_byte(u8 x) noexcept
         {
             return SBox[x];
         }
@@ -444,16 +473,20 @@ namespace nyaszip
         static inline void mix_cols(u8 * state)
         {
             auto words = reinterpret_cast<u32 *>(state);
-            words[0] = word_mul(0x03010102, words[0]);
-            words[1] = word_mul(0x03010102, words[1]);
-            words[2] = word_mul(0x03010102, words[2]);
-            words[3] = word_mul(0x03010102, words[3]);
+            words[0] = word_mul_0x03010102(words[0]);
+            words[1] = word_mul_0x03010102(words[1]);
+            words[2] = word_mul_0x03010102(words[2]);
+            words[3] = word_mul_0x03010102(words[3]);
         }
         static inline void add_round_key(u8 * state, u8 const* rkey)
         {
             xor_to<16>(state, rkey);
         }
     };
+    auto const AES_basic::WordMul00 = AES_basic::_gen_word_mul_table(0x00);
+    auto const AES_basic::WordMul01 = AES_basic::_gen_word_mul_table(0x01);
+    auto const AES_basic::WordMul02 = AES_basic::_gen_word_mul_table(0x02);
+    auto const AES_basic::WordMul03 = AES_basic::_gen_word_mul_table(0x03);
     auto const AES_basic::SBox = AES_basic::_gen_sbox();
 
     /// @brief the AES encrption
@@ -2215,6 +2248,7 @@ namespace nyaszip
         delete _buffer;
         if (_owned_output)
         {
+            _output->flush();
             delete _output;
         }
     }
