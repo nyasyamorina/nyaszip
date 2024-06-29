@@ -257,25 +257,23 @@ namespace nyaszip
         return ~static_cast<u32>(*buff);
     }
 
-    static constexpr u32 crc32(u8 value)
-    {
-        u64 buff = value;
-        constexpr u64 divisor = (static_cast<u64>(0xEDB88320) << 1) | 1;
-        for (u8 flag = 0xFF; flag; flag >>= 1)
-        {
-            if (buff & 1) { buff ^= divisor; }
-            buff >>= 1;
-        }
-        return buff;
-    }
-    static constexpr ::std::array<u32, 256> _gen_crc32_table()
-    {
-        ::std::array<u32, 256> res;
-        u8 value = 0;
-        ::std::for_each(res.begin(), res.end(), [&value](u32 & crc) { crc = crc32(value++); });
-        return res;
-    }
-    static auto const crc32_table = _gen_crc32_table();
+    static constexpr ::std::array<u32, 256> crc32_table = [] {
+        auto table = decltype(crc32_table){};
+        u8 b = 0;
+        ::std::for_each(table.begin(), table.end(), [&b](u32 & crc) {
+            crc = b++;
+            for (u8 bit = 0; bit < 8; bit ++)
+            {
+                bool do_subtraction = crc & 1;
+                crc >>= 1;
+                if (do_subtraction)
+                {
+                    crc ^= 0xEDB88320;
+                }
+            }
+        });
+        return table;
+    }();
     static inline u32 crc32(u32 crc /* set to 0 first */, u8 const* data, u64 length)
     {
         u8 const* const end = data + length;
@@ -361,7 +359,6 @@ namespace nyaszip
     public:
         static constexpr u16 GF2_POLY_DIVISOR = 0x011B;
 
-
         static constexpr inline u8 rcon(u8 i) noexcept
         {
             // some mysterious constants called `round constants` defined in AES standard.
@@ -404,23 +401,20 @@ namespace nyaszip
             return trans ^ 0x63;
         }
 
-        static constexpr ::std::array<u32, 256> _gen_word_mul_table() noexcept
-        {
-            auto [x0, x1, x2, x3] = u32_to_u8s(0x03010102);
-
-            ::std::array<u32, 256> res;
+        static constexpr ::std::array<u32, 256> ByteMul0x03010102 = [] {
+            ::std::array<u32, 256> table;
             u8 y = 0;
-            ::std::for_each(res.begin(), res.end(), [x0, x1, x2, x3, &y](u32 & word) {
-                u8 r0 = byte_mul(x0, y);
-                u8 r1 = byte_mul(x1, y);
-                u8 r2 = byte_mul(x2, y);
-                u8 r3 = byte_mul(x3, y);
+            ::std::for_each(table.begin(), table.end(), [&y](u32 & word) {
+                auto const [x0, x1, x2, x3] = u32_to_u8s(0x03010102);
+                u8 r0 = static_cast<u8>(GF2poly<u16>::modmul(x0, y, GF2_POLY_DIVISOR));
+                u8 r1 = static_cast<u8>(GF2poly<u16>::modmul(x1, y, GF2_POLY_DIVISOR));
+                u8 r2 = static_cast<u8>(GF2poly<u16>::modmul(x2, y, GF2_POLY_DIVISOR));
+                u8 r3 = static_cast<u8>(GF2poly<u16>::modmul(x3, y, GF2_POLY_DIVISOR));
                 y++;
                 word = u8s_to_u32(r0, r1, r2, r3);
             });
-            return res;
-        }
-        static ::std::array<u32, 256> const ByteMul0x03010102;
+            return table;
+        }();
         static inline u32 word_mul_0x03010102(u32 y) noexcept
         {
             auto [y0, y1, y2, y3] = u32_to_u8s(y);
@@ -431,14 +425,16 @@ namespace nyaszip
             return r0 ^ r1 ^ r2 ^ r3;
         }
 
-        static constexpr ::std::array<u8, 256> _gen_sbox() noexcept
-        {
-            ::std::array<u8, 256> res;
-            u8 value = 0;
-            ::std::for_each(res.begin(), res.end(), [&value](u8 & sb) { sb = _sub_byte(value++); });
-            return res;
-        }
-        static ::std::array<u8, 256> const SBox;
+        static constexpr ::std::array<u8, 256> SBox = [] {
+            ::std::array<u8, 256> table;
+            u8 b = 0;
+            ::std::for_each(table.begin(), table.end(), [&b](u8 & sb) {
+                sb = static_cast<u8>(GF2poly<u16>::invmodmul(b++, GF2_POLY_DIVISOR));
+                sb ^= ::std::rotl(sb, 1) ^ ::std::rotl(sb, 2) ^ ::std::rotl(sb, 3) ^ ::std::rotl(sb, 4);
+                sb ^= 0x63;
+            });
+            return table;
+        }();
         static inline u8 sub_byte(u8 x) noexcept
         {
             return SBox[x];
@@ -482,8 +478,6 @@ namespace nyaszip
             xor_to<16>(state, rkey);
         }
     };
-    auto const AES_basic::ByteMul0x03010102 = AES_basic::_gen_word_mul_table();
-    auto const AES_basic::SBox = AES_basic::_gen_sbox();
 
     /// @brief the AES encrption
     /// @tparam bits only can be 128, 192 or 256.
